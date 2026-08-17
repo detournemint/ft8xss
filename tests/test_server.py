@@ -61,6 +61,18 @@ class DriveCorrection(unittest.TestCase):
             self.assertIsNone(new, f"{po} W / ALC {alc} should pass")
             self.assertIn("tolerance", why)
 
+    def test_an_unknown_target_is_not_invented(self):
+        """With the rig set to 50% and not reporting it, a fallback target of 25
+        made 26 W report itself as healthy while half the power went unused.
+        ALC is still judged; power is not guessed at."""
+        new, why = server._drive_correction(26.0, 0.094, None, 138)
+        self.assertIsNone(new)
+        self.assertIn("not judged", why)
+        # an over-driven signal is still over-driven whatever the target
+        new, why = server._drive_correction(26.0, 0.9, None, 138)
+        self.assertIsNotNone(new)
+        self.assertIn("ALC", why)
+
     def test_corrections_are_capped_per_band(self):
         """Four calibrations on 20m settled at 108, 158, 128 and 118 because the
         audio offset kept moving underneath them. Corrections that do not

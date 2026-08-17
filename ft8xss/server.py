@@ -1658,11 +1658,17 @@ def _drive_correction(po, alc, target_w, att):
     """Return (new_att, reason) or (None, reason) if nothing to do.
 
     Attenuation is in tenths of a dB, so a power ratio converts directly.
+    `target_w` may be None when the rig will not say what it is set to; the ALC
+    rule still applies, but there is nothing to judge the power against.
     """
     if alc is not None and alc > ALC_HIGH:
         # over-driven: back off proportionally to how far over we are
         step = 80 if alc > 0.6 else 40
         return min(250, att + step), f"ALC {alc:.2f} above {ALC_HIGH}"
+    if target_w is None:
+        # Assuming a figure here is how 26 W against a 50 W setting reported
+        # itself as healthy: invent the target and you invent the verdict.
+        return None, "power not judged — the rig did not report its power setting"
     if po and target_w and po < PO_LOW * target_w:
         import math
         need_db = 10 * math.log10(target_w / max(po, 0.5))
@@ -2118,7 +2124,7 @@ async def evaluate_transmission(peak):
     po, alc, swr = peak.get("po"), peak.get("alc"), peak.get("swr")
     if not po:
         return
-    target = (ST.rig or {}).get("rfpower_pct") or 25
+    target = (ST.rig or {}).get("rfpower_pct")      # None if the rig is quiet
     att = bs_read_att() or 100
     new_att, reason = _drive_correction(po, alc, target, att)
 
