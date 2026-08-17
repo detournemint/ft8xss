@@ -3,6 +3,7 @@ name = "ft8xss"
 version = "0.1.0"
 description = "Browser front end for WSJT-X: live decodes, click-to-call, logging, rig telemetry"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 dependencies = ["aiohttp>=3.9"]
 keywords = ["ham-radio", "amateur-radio", "ft8", "wsjt-x", "hamlib"]
@@ -15,6 +16,13 @@ classifiers = [
 
 [project.scripts]
 ft8xss = "ft8xss.server:main_cli"
+
+[tool.setuptools]
+packages = ["ft8xss"]
+
+[tool.setuptools.package-data]
+# the web interface ships inside the package
+ft8xss = ["static/*"]
 
 [build-system]
 requires = ["setuptools>=68"]

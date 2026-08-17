@@ -202,3 +202,32 @@ async def restart_wsjtx(prepare=None):
     await pr.wait()
     invalidate()
     return True
+
+
+# WSJT-X moves the audio offsets with keyboard shortcuts, 60 Hz per press.
+# Using these rather than the spin boxes means no pixel coordinates to guess at
+# and no breakage when the layout changes between versions.
+NUDGE_KEYS = {
+    "rx":   ("F11", "F12"),
+    "tx":   ("shift+F11", "shift+F12"),
+    "both": ("ctrl+F11", "ctrl+F12"),
+}
+STEP_HZ = 60
+MAX_PRESSES = 40          # 2400 Hz of travel; more than the usable passband
+
+
+async def nudge_freq(which, steps):
+    """Move an audio offset by `steps` * 60 Hz. Negative is down."""
+    keys = NUDGE_KEYS.get(which)
+    if not keys or not steps:
+        return False
+    key = keys[0] if steps < 0 else keys[1]
+    wid = await window_id()
+    if not wid:
+        return False
+    await xdo("windowfocus", "--sync", wid)
+    await asyncio.sleep(0.3)
+    for _ in range(min(abs(int(steps)), MAX_PRESSES)):
+        await xdo("key", "--clearmodifiers", key)
+        await asyncio.sleep(0.06)
+    return True

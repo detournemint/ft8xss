@@ -32,6 +32,10 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
 - **Rig telemetry** — live PO, ALC, SWR and S-meter through hamlib
 - **Automatic band setup** — on band change: tune the ATU if SWR is high, then
   find the drive that gives full power with clean ALC
+- **Transmission check** — every transmission is measured. If power or ALC is
+  wrong for the band, ft8xss says so and can correct the drive itself
+- **Clear-slot TX audio** — picks a quiet audio offset before you transmit, and
+  you can nudge TX and RX by hand
 - **Propagation** — full solar/band data, VHF phenomena, and a band
   recommendation for the current conditions
 - **Who hears me** — live PSK Reporter reception reports
@@ -65,6 +69,11 @@ live station state, recent errors and the log — with API keys redacted.
 - **No silent arming.** Every transmission traces to an action you took.
   Automatic band setup arms the radio only for its own measurements and returns
   it to the state it found.
+- **Refuses a bad match.** Above an SWR of 3 it will not transmit at all, and it
+  runs the ATU rather than pushing into a mismatch.
+- **Corrections are passive.** The transmission check measures transmissions you
+  made; it never keys the radio to find out. A drive correction restarts WSJT-X,
+  so it is only applied while the station is idle — never during a QSO.
 
 ## Tested radios
 
@@ -113,6 +122,25 @@ Useful to know, roughly in order:
 
 ## Installation
 
+```sh
+git clone https://github.com/detournemint/ft8xss
+cd ft8xss
+./install.sh              # local station
+./install.sh --headless   # server station, no monitor attached
+```
+
+The installer works out your package manager, installs Python, aiohttp, hamlib
+and the X tools, lists your serial ports and offers to test CAT, asks for your
+callsign and grid, writes `~/.config/ft8xss.env` (mode 600) and installs the
+systemd user services. It asks before every change and is safe to re-run.
+`./install.sh --uninstall` removes the services and leaves your config alone.
+
+Two things it cannot do for you, both inside WSJT-X's own settings:
+
+- **Radio → Rig: "Hamlib NET rigctl"**, network server `127.0.0.1:4532`, so
+  ft8xss and WSJT-X can share the radio.
+- **Reporting → UDP Server port 2237**, "Accept UDP requests" ticked.
+
 ft8xss runs in two arrangements. Both use the same code.
 
 ### Local — one machine
@@ -127,6 +155,8 @@ from a browser. This needs the optional headless helper (a virtual X display
 plus the GUI automation). See `docs/`.
 
 ### Requirements
+
+If you would rather not run the installer:
 
 - WSJT-X (any recent version)
 - Python 3.10+, `aiohttp`

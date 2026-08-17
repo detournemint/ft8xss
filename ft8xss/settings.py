@@ -34,6 +34,12 @@ SCHEMA = [
     ("AUTO_ARM", "Auto-arm transmit", "Safety", "bool", False, False,
      "Let the station re-enable transmit by itself. With CQ selected this means "
      "it transmits unattended. Off is strongly recommended."),
+    ("AUTO_FIX_DRIVE", "Correct drive automatically", "Safety", "bool", False, False,
+     "After a transmission, if power or ALC is wrong for the band, fix the drive "
+     "automatically. Only ever applied while the station is idle, never mid-QSO."),
+    ("AUTO_DF", "Auto-place TX audio", "Safety", "bool", False, False,
+     "Before a transmission you start, move the TX audio offset to a clear slot. "
+     "Never transmits by itself."),
     ("SWR_TRIGGER", "Auto-tune SWR threshold", "Safety", "number", False, False,
      "Run the ATU when a transmission ends above this SWR."),
     ("TUNE_COOLDOWN", "Tune cooldown (s)", "Safety", "number", False, False,

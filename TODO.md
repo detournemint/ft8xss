@@ -12,7 +12,8 @@ Ideas credited to the projects they came from — see README for links.
       buttons *is* the port — that automation does not exist in WSJT-X and is
       the part the community objects to.
 - [ ] **First-run wizard.** Web form: callsign, grid, QRZ logbook key, radio,
-      audio devices. Writes config + systemd units.
+      audio devices. Writes config + systemd units. Half done: `install.sh`
+      covers it from the shell, including radio detection and a CAT test.
 - [ ] **Radio auto-detection.** Enumerate `/dev/ttyUSB*` and `/dev/ttyACM*`,
       read USB VID/PID, map to a hamlib model, verify by starting rigctld and
       reading the frequency back. Pick the audio codec on the same USB device.
@@ -20,8 +21,15 @@ Ideas credited to the projects they came from — see README for links.
       env file with 0600 permissions.
 - [x] Licence: GPL-3.0, matching the WSJT-X ecosystem.
 - [x] Remove hardcoded callsign/grid defaults; env prefix is now FT8XSS_.
-- [ ] Install docs for both **local** (WSJT-X and ft8xss on one desktop) and
-      **server** (headless station, browser elsewhere) layouts.
+- [x] Install docs for both **local** (WSJT-X and ft8xss on one desktop) and
+      **server** (headless station, browser elsewhere) layouts, plus
+      `install.sh` which sets up either.
+- [ ] **Audio offsets without a GUI.** Moving TX/RX audio uses WSJT-X's own
+      keyboard shortcuts, so it needs xdotool and a display. There is no UDP
+      message for it; a patch to WSJT-X would be the real fix.
+- [ ] **Drive correction is single-shot.** One measurement, one adjustment. It
+      does not iterate the way band setup does, because iterating would mean
+      transmitting on its own.
 
 ## Adopted from prior art
 

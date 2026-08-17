@@ -131,6 +131,18 @@
   .up.bad{color:#ff9090;border-color:#7a2020}
   ul{margin:0;padding:0}
   .muted{color:var(--dim)} .err{color:var(--warn)}
+  .kv.audio b{display:flex;align-items:center;gap:5px;justify-content:flex-end}
+  .nudge{padding:1px 7px;font-size:13px;line-height:1.35;border-radius:5px;
+         background:#1b2330;border:1px solid #33404f;color:var(--fg);cursor:pointer}
+  .nudge:hover{background:#243040}
+  .chk{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);
+       cursor:pointer;white-space:nowrap}
+  .chkbar{display:none;align-items:center;gap:12px;padding:9px 14px;
+          background:#2a2413;border:1px solid #6b5a1e;border-radius:9px;
+          color:#f0dd9d;margin:0 0 10px}
+  .chkbar.on{display:flex}
+  .chkbar.ok{background:#14301f;border-color:#2b7a4b;color:#9df0c0}
+  .chkbar .meta{margin-left:auto;font-size:11px;opacity:.8}
   .recbar{display:none;align-items:center;gap:10px;padding:8px 14px;
           background:#132437;border-bottom:1px solid #245079;color:#9fd0ff;
           position:sticky;top:0;z-index:19;font-size:12px}
@@ -245,6 +257,12 @@
   <button id="armtx" class="warnbtn">Enable TX</button>
 </div>
 
+<div id="chkbar" class="chkbar">
+  <span class="lbl" id="chk-lbl">TX CHECK</span>
+  <span id="chk-text">—</span>
+  <button id="chk-fix" class="go" style="display:none">Fix drive</button>
+  <span class="meta" id="chk-meta"></span>
+</div>
 <div id="txbar" class="txbar">
   <span class="dot"></span>
   <span class="lbl">TRANSMITTING</span>
@@ -296,6 +314,20 @@
       <div class="kv"><span>S-meter</span><b id="r-s">—</b></div>
       <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
       <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
+      <div class="kv audio"><span>TX audio</span>
+        <b><span id="a-tx">—</span> Hz
+          <button class="nudge" data-w="tx" data-d="-1">&minus;</button><button
+                  class="nudge" data-w="tx" data-d="1">+</button></b></div>
+      <div class="kv audio"><span>RX audio</span>
+        <b><span id="a-rx">—</span> Hz
+          <button class="nudge" data-w="rx" data-d="-1">&minus;</button><button
+                  class="nudge" data-w="rx" data-d="1">+</button></b></div>
+      <div class="rigacts">
+        <button id="dfauto" class="go">Find clear slot</button>
+        <button id="dfsync">RX &larr; TX</button>
+        <label class="chk"><input type="checkbox" id="dfhold"> auto before TX</label>
+      </div>
+      <div id="a-note" class="advice" style="display:none"></div>
       <div class="rigacts"><button id="tunebtn" class="go">Run tuner</button><button id="bandbtn">Setup band</button></div>
       <div style="padding:6px 12px">
         <a id="diagbtn" href="/api/diagnostics" download
@@ -396,6 +428,13 @@
       <button id="set-restart">Save &amp; restart</button>
       <span id="set-msg" class="muted" style="align-self:center"></span>
     </div>
+    <h2 style="margin-top:22px">Station power</h2>
+    <div class="advice" id="stn-state">—</div>
+    <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
+      <button id="stn-stop">Shut down station</button>
+      <button id="stn-start" class="go">Start station</button>
+      <span id="stn-msg" class="muted" style="align-self:center"></span>
+    </div>
   </div>
 </section>
 
@@ -430,6 +469,7 @@ function connect(){
       setUploads(data.uploads); setRig(data.rig); setPsk(data.psk);
       setBands(data.bands); setTune(data.tune); setBandfix(data.bandfix);
       setSwr(data.swr_block);
+      setAudio(data.audio); setCheck(data.txcheck); setStation(data.station);
       applyCaps(data.caps);
       workedEntities = data.entities || workedEntities;
       if (data.last_decode_age != null) lastDecodeAt = Date.now() - data.last_decode_age*1000;
@@ -448,6 +488,9 @@ function connect(){
     else if (type === "bands"){ setBands(data); }
     else if (type === "tune"){ setTune(data); }
     else if (type === "swr"){ setSwr(data); }
+    else if (type === "audio"){ setAudio(data); }
+    else if (type === "txcheck"){ setCheck(data); }
+    else if (type === "station"){ setStation(data); }
     else if (type === "bandfix"){ setBandfix(data); }
     else if (type === "card"){ setCard(data); }
     else if (type === "ack"){
@@ -727,6 +770,78 @@ function setSwr(b){
   });
   measureChrome();
 }
+/* ---- audio offsets ---------------------------------------------------- */
+let audio = {};
+function setAudio(a){
+  if (!a) return;
+  audio = a;
+  $("#a-tx").textContent = a.tx == null ? "\u2014" : a.tx;
+  $("#a-rx").textContent = a.rx == null ? "\u2014" : a.rx;
+  $("#dfhold").checked = !!a.auto;
+  const n = $("#a-note");
+  if (a.note){ n.style.display = "block"; n.textContent = a.note; }
+  else { n.style.display = "none"; }
+  document.querySelectorAll(".nudge").forEach(b => b.disabled = !!a.busy);
+}
+document.querySelectorAll(".nudge").forEach(b => b.onclick = () =>
+  ws.send(JSON.stringify({action:"setdf", which:b.dataset.w, delta:+b.dataset.d})));
+$("#dfauto").onclick  = () => ws.send(JSON.stringify({action:"autodf"}));
+$("#dfsync").onclick  = () => ws.send(JSON.stringify({action:"syncdf"}));
+$("#dfhold").onchange = e =>
+  ws.send(JSON.stringify({action:"autodf", enabled: e.target.checked}));
+
+/* ---- transmission check ------------------------------------------------ */
+let lastCheck = null;
+function setCheck(c){
+  const bar = $("#chkbar");
+  if (!c || !c.band){ bar.className = "chkbar"; return; }
+  lastCheck = c;
+  const w = c.po == null ? "?" : c.po.toFixed(1);
+  if (c.ok){
+    $("#chk-lbl").textContent = "TX OK";
+    $("#chk-text").textContent =
+      `${c.band}: ${w} W of ${c.target} W, ALC ${(c.alc ?? 0).toFixed(2)}`;
+    $("#chk-fix").style.display = "none";
+    bar.className = "chkbar on ok";
+  } else {
+    $("#chk-lbl").textContent = c.applying ? "ADJUSTING" : "TX CHECK";
+    $("#chk-text").textContent = c.applied
+      ? `${c.band}: ${c.reason} \u2014 drive corrected, ${c.att} \u2192 ${c.applied}`
+      : `${c.band}: ${c.reason}`;
+    // only offer the button when nothing was applied for us
+    $("#chk-fix").style.display =
+      (c.applied || c.applying) ? "none" : "inline-block";
+    bar.className = "chkbar on";
+  }
+  $("#chk-meta").textContent = c.at ? c.at + "Z" : "";
+  measureChrome();
+}
+$("#chk-fix").onclick = () => { ws.send(JSON.stringify({action:"bandsetup"}));
+                                toast("running band setup"); };
+
+/* ---- station power ----------------------------------------------------- */
+function setStation(st){
+  if (!st) return;
+  const idle = st.state === "idle";
+  $("#stn-state").textContent = idle
+    ? "Station is idle \u2014 radio off, WSJT-X stopped. This server is still running."
+    : "Station is running.";
+  $("#stn-stop").disabled  = idle;
+  $("#stn-start").disabled = !idle;
+  if ((st.steps||[]).length) $("#stn-msg").textContent = st.steps.join(" \u00b7 ");
+}
+$("#stn-stop").onclick = () => {
+  if (!confirm("Shut the station down?\n\nStops transmitting, powers the radio "
+             + "off and stops WSJT-X. The web server keeps running so you can "
+             + "start it again from here.")) return;
+  $("#stn-msg").textContent = "shutting down\u2026";
+  ws.send(JSON.stringify({action:"station", state:"idle"}));
+};
+$("#stn-start").onclick = () => {
+  $("#stn-msg").textContent = "starting\u2026";
+  ws.send(JSON.stringify({action:"station", state:"running"}));
+};
+
 $("#swr-tune").onclick = () => ws.send(JSON.stringify({action:"tune"}));
 
 function setTune(t){
@@ -803,7 +918,7 @@ document.addEventListener("click", e => {
 function measureChrome(){
   const head = document.querySelector("header");
   const tabs = document.querySelector(".tabs");
-  const bars = [...document.querySelectorAll(".recbar.on,.warnbar.on,.txbar.on")]
+  const bars = [...document.querySelectorAll(".recbar.on,.warnbar.on,.txbar.on,.chkbar.on")]
                  .concat($("#swrbar").style.display === "flex" ? [$("#swrbar")] : []);
   let h = (head?.offsetHeight||0) + (tabs?.offsetHeight||0) + 46;
   bars.forEach(b => h += b.offsetHeight);

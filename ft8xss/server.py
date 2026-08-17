@@ -11,12 +11,18 @@ import json
 import os
 import re
 import struct
+import sys
 import time
 from datetime import datetime, timezone
 from math import radians, degrees, sin, cos, asin, atan2, sqrt
 from pathlib import Path
 
 from aiohttp import web, ClientSession
+
+# Sibling modules are imported flat so a checkout runs as-is
+# (`python3 ft8xss/server.py`). Put this directory on the path so the package
+# forms work too: `python3 -m ft8xss.server` and the installed entry point.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import diag
 import dxcc
@@ -229,6 +235,11 @@ class Station:
         self.bandfix = {}
         self.busy_band = False
         self.swr_block = {"blocked": False, "swr": None, "at": None}
+        self.txcheck = {}
+        self.checked_bands = set()
+        self.station = {"state": "running", "steps": [], "at": None}
+        self.audio = {"tx": None, "rx": None, "hold": False,
+                      "auto": AUTO_DF, "note": "", "busy": False}
         self.last_beat = 0.0
         self.ever_beat = False
         self.uploads = {"ok": 0, "failed": 0, "last": None}
@@ -245,6 +256,14 @@ class Station:
                 dead.append(ws)
         for ws in dead:
             self.clients.discard(ws)
+
+
+# --- audio offsets ---------------------------------------------------------
+# FT8 lives inside the SSB filter; outside this range the rig rolls it off.
+DF_MIN, DF_MAX = 300, 2600
+DF_WIDTH = 60            # a signal is ~50 Hz wide, and WSJT-X steps by 60
+MAX_DF_STEPS = 40        # how far we will travel in one move
+AUTO_DF = _env("AUTO_DF", "1") == "1"
 
 
 ST = Station()
@@ -323,6 +342,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
 
         prev = ST.status
         ST.status = s
+        ST.audio["tx"], ST.audio["rx"] = s.get("tx_df"), s.get("rx_df")
         nb = band_of(s.get("dial"))
         if nb and nb != ST.last_dial:
             if ST.last_dial is not None:
@@ -543,7 +563,8 @@ async def ws_handler(req):
         "status": ST.status, "decodes": ST.decodes[-200:],
         "qsos": ST.qsos[-30:], "uploads": ST.uploads, "rig": ST.rig,
         "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
-        "swr_block": ST.swr_block,
+        "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
+        "station": ST.station,
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
         "entities": sorted(ST.worked_entities),
@@ -566,6 +587,8 @@ async def ws_handler(req):
                         "action": "call", "ok": False, "who": tx_block_msg()}}))
                     continue
                 d = next((x for x in ST.decodes if x["id"] == req_msg.get("id")), None)
+                if d:
+                    await auto_place_tx()
                 if d and ST.status.get("tx_enabled") is not True:
                     await set_tx(True)
                 ok = PROTO.send_reply(d) if d else False
@@ -632,11 +655,62 @@ async def ws_handler(req):
                         ok = bool(cur and cur.isdigit() and abs(int(cur) - hz) < 100)
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "setfreq", "ok": ok, "who": f"{hz/1e6:.3f}"}}))
+            elif act == "station":
+                want = req_msg.get("state")
+                if want == "idle":
+                    ok = await station_shutdown()
+                elif want == "running":
+                    ok = await station_start()
+                else:
+                    ok = False
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "station", "ok": ok,
+                    "who": "; ".join(ST.station.get("steps") or []) or "?"}}))
+            elif act == "setdf":
+                which = "rx" if req_msg.get("which") == "rx" else "tx"
+                cur = ST.status.get(f"{which}_df") or 0
+                try:
+                    if req_msg.get("delta") is not None:
+                        hz = cur + int(req_msg["delta"]) * DF_WIDTH
+                    else:
+                        hz = int(req_msg.get("hz", cur))
+                except (TypeError, ValueError):
+                    hz = cur
+                ST.audio["hold"] = True      # touching it is taking control
+                ok, msg = await set_audio_freq(which, hz, why="(manual)")
+                await push_audio(msg)
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "setdf", "ok": ok, "who": msg}}))
+            elif act == "autodf":
+                if req_msg.get("enabled") is not None:
+                    ST.audio["auto"] = bool(req_msg["enabled"])
+                    ST.audio["hold"] = not ST.audio["auto"]
+                    await push_audio("auto placement "
+                                     + ("on" if ST.audio["auto"] else "off"))
+                    ok, msg = True, "ok"
+                else:
+                    ST.audio["hold"] = False   # explicit "find me a slot now"
+                    band = band_of(ST.status.get("dial"))
+                    hz, _, note = pick_clear_slot(
+                        ST.status.get("tx_df"), ST.decodes, band)
+                    ok, msg = (await set_audio_freq("tx", hz, why="(manual auto)")
+                               if hz else (False, "no slot found"))
+                    await push_audio(note if ok else msg)
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "autodf", "ok": ok, "who": msg}}))
+            elif act == "syncdf":
+                # Rx <- Tx, the equivalent of WSJT-X's own button
+                ok, msg = await set_audio_freq(
+                    "rx", ST.status.get("tx_df") or 1500, why="(sync to tx)")
+                await push_audio(msg)
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "syncdf", "ok": ok, "who": msg}}))
             elif act == "cq":
                 if tx_blocked():
                     await ws.send_str(json.dumps({"type": "ack", "data": {
                         "action": "cq", "ok": False, "who": tx_block_msg()}}))
                     continue
+                await auto_place_tx()
                 grid = MY_GRID[:4].upper()
                 text = f"CQ {MY_CALL} {grid}"
                 # Call CQ is the explicit opt-in: arm the transmitter for it
@@ -660,7 +734,8 @@ async def api_state(req):
         "qsos": ST.qsos[-30:], "uploads": ST.uploads,
         "wsjtx": str(ST.wsjtx_addr), "worked_count": len(ST.worked),
         "rig": ST.rig, "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
-        "swr_block": ST.swr_block,
+        "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
+        "station": ST.station,
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
@@ -719,6 +794,7 @@ async def rig_poll():
                     # high SWR at the end of a transmission -> run the ATU,
                     # but only while idle and not more often than the cooldown
                     asyncio.create_task(note_swr(peak["swr"], "transmission"))
+                    asyncio.create_task(evaluate_transmission(dict(peak)))
                     if (peak["swr"] >= SWR_TRIGGER
                             and peak["po"] > 1.0
                             and time.time() - ST.tune["last"] > TUNE_COOLDOWN):
@@ -1259,6 +1335,253 @@ async def arm_tx():
     return await set_tx(True)
 
 
+# how far off before we say something, and how far we trust one correction
+def pick_clear_slot(current, decodes, band):
+    """Quietest audio slot reachable from `current`.
+
+    WSJT-X moves in 60 Hz steps, so only offsets on that grid are candidates.
+    Score each by how many recent decodes sit within a signal width of it, and
+    break ties by the least movement -- a clear slot next door beats an equally
+    clear one across the waterfall.
+    """
+    recent = list(decodes)[-400:]
+    others = [d for d in recent
+              if not d.get("tx") and d.get("band") == band and d.get("df")]
+    cur = int(current or 1500)
+    cands = []
+    k = -MAX_DF_STEPS
+    while k <= MAX_DF_STEPS:
+        hz = cur + k * DF_WIDTH
+        if DF_MIN <= hz <= DF_MAX:
+            crowd = sum(1 for d in others if abs(d["df"] - hz) < DF_WIDTH)
+            cands.append((crowd, abs(k), hz))
+        k += 1
+    if not cands:
+        return None, 0, "no reachable slot in the passband"
+    cands.sort()
+    crowd, _, hz = cands[0]
+    here = sum(1 for d in others if abs(d["df"] - cur) < DF_WIDTH)
+    return hz, crowd, (f"{hz} Hz -- {crowd} signal{'' if crowd == 1 else 's'} "
+                       f"nearby vs {here} at {cur}")
+
+
+
+async def set_audio_freq(which, hz, why=""):
+    """Move an audio offset to `hz` using WSJT-X's own shortcuts.
+
+    Returns (ok, message). Never transmits -- this only moves where we would
+    transmit if asked to.
+    """
+    if not gui.available():
+        return False, f"needs GUI automation ({gui.reason()})"
+    if ST.audio.get("busy"):
+        return False, "already moving"
+    hz = max(DF_MIN, min(DF_MAX, int(hz)))
+    key = "tx_df" if which == "tx" else "rx_df"
+    cur = ST.status.get(key)
+    if cur is None:
+        return False, "WSJT-X has not reported an offset yet"
+    steps = round((hz - cur) / DF_WIDTH)
+    if steps == 0:
+        return True, f"{which.upper()} already at {cur} Hz"
+    ST.audio["busy"] = True
+    try:
+        await gui.nudge_freq(which, steps)
+        # let the resulting Status packet land before believing anything
+        for _ in range(25):
+            await asyncio.sleep(0.2)
+            now = ST.status.get(key)
+            if now is not None and abs(now - hz) <= DF_WIDTH // 2:
+                diag.log(f"[audio] {which} {cur} -> {now} Hz {why}".rstrip())
+                return True, f"{which.upper()} {now} Hz"
+        now = ST.status.get(key)
+        return False, f"{which.upper()} moved to {now} Hz, wanted {hz}"
+    finally:
+        ST.audio["busy"] = False
+        await push_audio()
+
+
+async def push_audio(note=None):
+    ST.audio["tx"] = ST.status.get("tx_df")
+    ST.audio["rx"] = ST.status.get("rx_df")
+    if note is not None:
+        ST.audio["note"] = note
+    await ST.broadcast("audio", ST.audio)
+
+
+async def auto_place_tx():
+    """Before an operator-initiated transmission, move to a clear slot.
+
+    Skipped when the operator has taken manual control (hold), when auto is
+    off, or when we are already somewhere quiet.
+    """
+    if not ST.audio.get("auto") or ST.audio.get("hold"):
+        return
+    if not gui.available():
+        return
+    band = band_of(ST.status.get("dial"))
+    cur = ST.status.get("tx_df")
+    hz, crowd, note = pick_clear_slot(cur, ST.decodes, band)
+    if hz is None or hz == cur:
+        await push_audio(f"holding {cur} Hz -- already clear")
+        return
+    here = sum(1 for d in ST.decodes
+               if not d.get("tx") and d.get("band") == band
+               and d.get("df") and abs(d["df"] - (cur or 0)) < DF_WIDTH)
+    if here <= crowd:
+        await push_audio(f"holding {cur} Hz -- nothing quieter nearby")
+        return
+    ok, msg = await set_audio_freq("tx", hz, why="(auto, before transmit)")
+    await push_audio(f"auto: {note}" if ok else f"auto failed: {msg}")
+
+
+PO_LOW = 0.70            # below this fraction of set power, drive is too low
+ALC_HIGH = 0.30
+MAX_STEP = 60            # tenths of a dB, one adjustment
+AUTO_FIX = _env("AUTO_FIX_DRIVE", "1") == "1"
+
+
+def _drive_correction(po, alc, target_w, att):
+    """Return (new_att, reason) or (None, reason) if nothing to do.
+
+    Attenuation is in tenths of a dB, so a power ratio converts directly.
+    """
+    if alc is not None and alc > ALC_HIGH:
+        # over-driven: back off proportionally to how far over we are
+        step = 80 if alc > 0.6 else 40
+        return min(250, att + step), f"ALC {alc:.2f} above {ALC_HIGH}"
+    if po and target_w and po < PO_LOW * target_w:
+        import math
+        need_db = 10 * math.log10(target_w / max(po, 0.5))
+        step = int(min(MAX_STEP, round(need_db * 10)))
+        if step >= 5:
+            return max(30, att - step), (f"{po:.1f} W of {target_w} W "
+                                         f"({need_db:.1f} dB low)")
+    return None, "within tolerance"
+
+
+async def station_shutdown():
+    """Put the station to bed without stopping this server.
+
+    Order matters: stop transmitting, then power the radio down, and only then
+    stop WSJT-X. rigctld stays up, because it is how we power the radio back on.
+    """
+    steps = []
+    diag.log("[station] shutdown requested")
+    await full_stop()
+    steps.append("transmit stopped")
+    ST.audio["auto"] = AUTO_DF
+
+    resp = await rig_cmd("\\set_powerstat 0")
+    if resp is not None and "RPRT 0" in resp:
+        ST.rig["power"] = False
+        steps.append("radio powered off")
+    else:
+        steps.append("radio power off FAILED")
+    await asyncio.sleep(1)
+
+    unit = _env("WSJTX_UNIT", "wsjtx.service")
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "stop", unit,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await pr.communicate()
+        steps.append(f"{unit} stopped" if pr.returncode == 0
+                     else f"{unit} stop FAILED ({(err or b'').decode()[:80]})")
+    except Exception as e:
+        steps.append(f"{unit} stop FAILED ({type(e).__name__})")
+    gui.invalidate()
+
+    ST.station = {"state": "idle", "steps": steps,
+                  "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+    diag.log("[station] idle: " + "; ".join(steps))
+    await ST.broadcast("station", ST.station)
+    return all("FAILED" not in x for x in steps)
+
+
+async def station_start():
+    """Bring the station back up from idle. Does not transmit."""
+    steps = []
+    diag.log("[station] start requested")
+    resp = await rig_cmd("\\set_powerstat 1")
+    if resp is not None and "RPRT 0" in resp:
+        steps.append("radio powered on")
+        await asyncio.sleep(4)          # the rig needs a moment before CAT works
+        ST.rig["power"] = True
+    else:
+        steps.append("radio power on FAILED")
+
+    unit = _env("WSJTX_UNIT", "wsjtx.service")
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "start", unit,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await pr.communicate()
+        steps.append(f"{unit} started" if pr.returncode == 0
+                     else f"{unit} start FAILED ({(err or b'').decode()[:80]})")
+    except Exception as e:
+        steps.append(f"{unit} start FAILED ({type(e).__name__})")
+    gui.invalidate()
+
+    ST.station = {"state": "running", "steps": steps,
+                  "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+    diag.log("[station] running: " + "; ".join(steps))
+    await ST.broadcast("station", ST.station)
+    return all("FAILED" not in x for x in steps)
+
+
+async def evaluate_transmission(peak):
+    """Judge a completed transmission and, if it is wrong, say so -- and fix it
+    when the station is idle. Never transmits to find out; it uses the
+    measurement the operator's own transmission already produced.
+    """
+    band = band_of(ST.status.get("dial"))
+    if not band:
+        return
+    po, alc, swr = peak.get("po"), peak.get("alc"), peak.get("swr")
+    if not po:
+        return
+    target = (ST.rig or {}).get("rfpower_pct") or 25
+    att = bs_read_att() or 100
+    new_att, reason = _drive_correction(po, alc, target, att)
+
+    ST.txcheck = {"band": band, "po": po, "alc": alc, "swr": swr,
+                  "target": target, "att": att, "suggest": new_att,
+                  "reason": reason, "ok": new_att is None,
+                  "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+    await ST.broadcast("txcheck", ST.txcheck)
+    if new_att is None:
+        ST.checked_bands.add(band)
+        return
+    diag.log(f"[txcheck] {band}: {reason}; att {att} -> {new_att}")
+
+    # only correct when idle: applying it restarts WSJT-X, which would wreck a
+    # QSO in progress, and we must not surprise the operator mid-exchange
+    idle = (not ST.status.get("transmitting")
+            and not (ST.status.get("dx_call") or "").strip()
+            and not ST.busy_band)
+    if AUTO_FIX and idle and band not in ST.checked_bands:
+        ST.checked_bands.add(band)
+        ST.txcheck["applying"] = True
+        await ST.broadcast("txcheck", ST.txcheck)
+        diag.log(f"[txcheck] {band}: applying att={new_att} (station idle)")
+        await restart_wsjtx_with(new_att)
+        d = bs_drive(); d[band] = new_att
+        try:
+            from bandsetup import save_drive
+            save_drive(d)
+        except Exception:
+            pass
+        ST.txcheck["applied"] = new_att
+        ST.txcheck["applying"] = False
+        await ST.broadcast("txcheck", ST.txcheck)
+
+
+def bs_read_att():
+    from bandsetup import read_att
+    return read_att()
+
+
 async def note_swr(swr, where=""):
     """Record an SWR reading and set or clear the transmit inhibit.
 
@@ -1500,5 +1823,13 @@ async def main():
     await asyncio.Event().wait()
 
 
+def main_cli():
+    """Console-script entry point (see pyproject [project.scripts])."""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        diag.log("[http] stopped")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main_cli()
