@@ -1697,6 +1697,21 @@ async def set_drive(att):
     while the radio is keyed rather than cutting a transmission in half.
     """
     if not gui.available():
+        # A drive change restarts WSJT-X, and for a few seconds afterwards there
+        # is no window to find. Saying "no window" then sends the operator
+        # hunting for a configuration fault that does not exist.
+        unit = _env("WSJTX_UNIT", "wsjtx.service")
+        try:
+            pr = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "is-active", unit,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            so, _ = await pr.communicate()
+            starting = (so or b"").decode().strip() in ("active", "activating")
+        except Exception:
+            starting = False
+        if starting:
+            return False, ("WSJT-X is still starting up — give it a few seconds "
+                           "and try again")
         return False, f"needs GUI automation ({gui.reason()})"
     if ST.busy_band:
         return False, "band setup is running"
@@ -1709,17 +1724,29 @@ async def set_drive(att):
     if not ATT_MIN <= att <= ATT_MAX:
         return False, f"must be between {ATT_MIN} and {ATT_MAX}"
 
+    # Restarting WSJT-X to set a value it already has costs the operator a
+    # restart, several missed decodes, and no change whatever.
+    current = bs_read_att()
+    if current is not None and current == att:
+        return False, (f"already at −{att / 10:.1f} dB — nothing to change")
+
     band = band_of(ST.status.get("dial"))
-    diag.log(f"[drive] {band}: setting attenuation to {att} (manual)")
+    diag.log(f"[drive] {band}: setting attenuation from {current} to {att} (manual)")
     await restart_wsjtx_with(att)
     if band:
         d = bs_drive(); d[band] = att
         from bandsetup import save_drive
         save_drive(d)
         ST.checked_bands.add(band)     # the operator has spoken; stop correcting
+    # The check that suggested this was measured at the old drive. Leaving it on
+    # screen keeps offering a correction that has already been made, which is
+    # how one click becomes three.
+    ST.txcheck = {}
+    await ST.broadcast("txcheck", ST.txcheck)
     await ST.broadcast("drive", drive_state())
-    return True, (f"{band or 'drive'} set to -{att / 10:.1f} dB "
-                  f"-- WSJT-X restarted, transmit is off")
+    return True, (f"{band or 'drive'} set to −{att / 10:.1f} dB — WSJT-X "
+                  f"restarted, transmit is off. The next transmission will be "
+                  f"measured again.")
 
 
 def clear_session(why=""):

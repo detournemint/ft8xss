@@ -106,6 +106,7 @@
   <li><a href="#band-setup-interrupted">A band setup was interrupted</a></li>
   <li><a href="#setup-swr-abort">SWR too high to transmit safely</a></li>
   <li><a href="#drive-busy">Transmitting — wait for the over</a></li>
+  <li><a href="#drive-restarting">WSJT-X is still starting up</a></li>
   <li><a href="#audio-no-offset">WSJT-X has not reported an offset</a></li>
 </ul>
 
@@ -444,6 +445,21 @@ usb 1-2.2: USB Audio CODEC          (the rig's soundcard)</pre>
   <p>
     Sort the antenna first: <b>Run tuner</b>, then check the feedline and that
     the antenna suits the band. See <a href="#high-swr">high SWR</a>.
+  </p>
+</div>
+
+<div class="msg sev-info" id="drive-restarting">
+  <div class="quote">WSJT-X is still starting up — give it a few seconds and try again</div>
+  <h3>The window is not there <i>yet</i><span class="pill info">retry</span></h3>
+  <p>
+    Changing the transmit drive restarts WSJT-X, and for a few seconds afterwards
+    there is no window for ft8xss to drive. Clicking again during that gap used
+    to report that no window could be found, which reads like a broken
+    configuration rather than a restart in progress. Wait a moment and try again.
+  </p>
+  <p>
+    If it persists once WSJT-X is up, the problem is real: see
+    <a href="#no-gui-automation">automation unavailable</a>.
   </p>
 </div>
 
