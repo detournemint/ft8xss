@@ -676,6 +676,15 @@ async def ws_handler(req):
                 ok, msg = await set_drive(req_msg.get("att"))
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "setdrive", "ok": ok, "who": msg}}))
+            elif act == "preflight":
+                checks = await preflight()
+                ST.station = {**ST.station, "checks": checks}
+                await ST.broadcast("station", ST.station)
+                bad = [c["name"] for c in checks if c["critical"] and not c["ok"]]
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "preflight", "ok": not bad,
+                    "who": "all checks passed" if not bad
+                           else "failing: " + ", ".join(bad)}}))
             elif act == "station":
                 want = req_msg.get("state")
                 if want == "idle":
@@ -1715,20 +1724,117 @@ def radio_present():
                 or list(Path("/dev").glob("ttyACM*")))
 
 
+# Checks marked critical decide whether the station is on the air. The rest are
+# worth reporting -- an operator wants to know the audio codec is missing -- but
+# do not by themselves mean the station is down.
+async def preflight():
+    """Look at every link in the chain and report what is actually true.
+
+    Going on the air touches USB, rigctld, CAT, the rig's audio codec, WSJT-X
+    and the UDP link, and a failure anywhere shows up as the same silence. Say
+    which one it is instead of making the operator bisect it.
+    """
+    out = []
+
+    def add(name, ok, detail="", critical=True):
+        out.append({"name": name, "ok": bool(ok), "detail": detail,
+                    "critical": critical})
+
+    port = _env("RIG_PORT", "")
+    ports = sorted([str(x) for x in Path("/dev").glob("ttyUSB*")]
+                   + [str(x) for x in Path("/dev").glob("ttyACM*")])
+    on_bus = Path(port).exists() if port else bool(ports)
+    add("Radio on the USB bus", on_bus,
+        ", ".join(ports) if ports else "no serial ports — check the cable, "
+        "and that the radio has power")
+
+    freq = await rig_cmd("f") if on_bus else None
+    cat = bool(freq and freq.strip().isdigit() and int(freq) > 0)
+    add("rigctld reachable", freq is not None,
+        "no answer on 127.0.0.1:4532 — is rigctld running?" if freq is None else "")
+    add("CAT responding", cat,
+        f"dial {int(freq)/1e6:.3f} MHz" if cat
+        else "no reply — the radio is off at the front panel, or the port, "
+             "baud rate or hamlib model is wrong")
+
+    if cat:
+        mode = (await rig_cmd("m") or "").splitlines()
+        add("Mode", bool(mode), mode[0] if mode else "not reported",
+            critical=False)
+        pwr = await rig_cmd("l RFPOWER")
+        add("Power setting readable", pwr is not None,
+            f"{float(pwr) * 100:.0f}%" if pwr and pwr.replace('.', '').isdigit()
+            else "", critical=False)
+
+    codec = []
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "arecord", "-l", stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        so, _ = await pr.communicate()
+        codec = [l for l in (so or b"").decode(errors="replace").splitlines()
+                 if l.startswith("card")]
+    except Exception:
+        pass
+    # any capture device passes, but naming the one that looks like a radio is
+    # the useful part: a webcam microphone is not going to decode FT8
+    rig_codec = [l for l in codec
+                 if re.search(r"codec|usb audio", l, re.I) and "kiyo" not in l.lower()]
+    add("Audio input device", bool(codec),
+        (rig_codec[0].split(":", 1)[-1].strip()[:60] if rig_codec
+         else (f"{len(codec)} device(s), none look like a radio codec"
+               if codec else "no capture device — WSJT-X will not decode")),
+        critical=False)
+
+    unit = _env("WSJTX_UNIT", "wsjtx.service")
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "is-active", unit,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        so, _ = await pr.communicate()
+        state = (so or b"").decode().strip()
+    except Exception:
+        state = "unknown"
+    add(f"{unit}", state == "active", state)
+
+    add("WSJT-X talking to us", ST.wsjtx_addr is not None,
+        "no UDP packet yet — check Reporting → UDP Server in WSJT-X"
+        if ST.wsjtx_addr is None else f"{ST.wsjtx_addr[0]}:{ST.wsjtx_addr[1]}")
+    add("GUI automation", gui.available(), gui.reason(), critical=False)
+    return out
+
+
 async def station_start():
-    """Bring the station back up from idle. Does not transmit."""
+    """Bring the station back up, then check it actually came up. Never transmits."""
     steps = []
     diag.log("[station] start requested")
-    resp = await rig_cmd("\\set_powerstat 1")
-    if resp is not None and "RPRT 0" in resp:
-        steps.append("radio powered on")
-        await asyncio.sleep(4)          # the rig needs a moment before CAT works
-        ST.rig["power"] = True
-    elif not radio_present():
-        steps.append("radio power on FAILED — the radio is not on the USB bus. "
-                     "It has to be switched on at the rig itself")
+    ST.station = {**ST.station, "starting": True, "checks": []}
+    await ST.broadcast("station", ST.station)
+
+    # rigctld gives up and restart-loops when it starts against a radio that is
+    # switched off, and stays useless after the radio comes back. If it is not
+    # answering, restart it before deciding the radio is at fault.
+    if radio_present() and (await rig_cmd("f")) is None:
+        try:
+            pr = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "restart", "rigctld.service",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await pr.wait()
+            await asyncio.sleep(3)
+            steps.append("rigctld restarted (it was not answering)")
+        except Exception as e:
+            steps.append(f"rigctld restart FAILED ({type(e).__name__})")
+
+    if radio_present():
+        resp = await rig_cmd("\\set_powerstat 1")
+        if resp is not None and "RPRT 0" in resp:
+            steps.append("radio powered on")
+            await asyncio.sleep(4)      # the rig needs a moment before CAT works
+            ST.rig["power"] = True
+        else:
+            steps.append("radio did not answer a power-on over CAT")
     else:
-        steps.append("radio power on FAILED")
+        steps.append("radio is not on the USB bus")
 
     unit = _env("WSJTX_UNIT", "wsjtx.service")
     try:
@@ -1742,13 +1848,25 @@ async def station_start():
         steps.append(f"{unit} start FAILED ({type(e).__name__})")
     gui.invalidate()
 
-    ok = all("FAILED" not in x for x in steps)
-    # WSJT-X running without a radio is not a station on the air; saying so
-    # would replace the one screen that explains what is wrong with an empty one
+    # WSJT-X needs a T/R period or two before it says anything over UDP, so give
+    # the slow parts a chance rather than failing them for being slow
+    checks = []
+    for wait in (4, 6, 8, 10):
+        await asyncio.sleep(wait)
+        checks = await preflight()
+        if all(c["ok"] for c in checks if c["critical"]):
+            break
+
+    bad = [c for c in checks if c["critical"] and not c["ok"]]
+    ok = not bad
     ST.station = {"state": "running" if ok else "idle", "steps": steps,
-                  "failed": not ok,
+                  "checks": checks, "failed": not ok, "starting": False,
                   "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
-    diag.log(f"[station] {'running' if ok else 'start failed'}: " + "; ".join(steps))
+    diag.log(f"[station] {'on the air' if ok else 'start incomplete'}: "
+             + "; ".join(steps))
+    for c in checks:
+        diag.log(f"[preflight] {'ok  ' if c['ok'] else 'FAIL'} {c['name']}"
+                 + (f" — {c['detail']}" if c["detail"] else ""))
     await ST.broadcast("station", ST.station)
     return ok
 

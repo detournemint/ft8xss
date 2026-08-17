@@ -113,12 +113,13 @@ audio offset, putting every transmission about 2 kHz off frequency, with no
 error reported anywhere. Leave split set to **None** unless you have verified
 against PSK Reporter that you are still being heard.
 
-**Powering the radio off over CAT is one-way on this rig.** The FT-991A exposes
-its CAT bridge and audio codec through an internal USB hub. A few minutes after
-`set_powerstat 0`, the whole hub leaves the USB bus — so the command to switch it
-back on has nothing to talk to, and the radio has to be powered on at the front
-panel. If your station is somewhere you cannot reach, stop WSJT-X and leave the
-radio powered.
+**Powering the radio off from the browser needs a way back.** `set_powerstat 0`
+puts the FT-991A in standby, and its USB stays enumerated on standby power, so
+`set_powerstat 1` can wake it again. That only holds while the radio keeps
+standby power: unplug it, or switch it off at the front panel, and its internal
+USB hub leaves the bus, taking CAT and the audio codec with it. Nothing on the
+computer can bring it back from there. If your station is somewhere you cannot
+physically reach, be sure you can restore power another way before using it.
 
 ### Tell us about your radio
 

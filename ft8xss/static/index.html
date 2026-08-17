@@ -158,6 +158,18 @@
           background:#14301f;border:1px solid #2b7a4b;color:#9df0c0}
   .qrtbtn:hover{background:#1a3d28}
   .qrtbtn:disabled{opacity:.55;cursor:default}
+  .qrtchecks{margin-top:16px;text-align:left;font-size:12px;
+             font-family:ui-monospace,monospace}
+  .qrtchecks .ck{display:flex;gap:9px;align-items:baseline;padding:3px 0;
+                 border-bottom:1px solid rgba(255,255,255,.05)}
+  .qrtchecks .ck:last-child{border-bottom:0}
+  .qrtchecks .mark{width:13px;flex:0 0 13px;text-align:center;font-weight:700}
+  .qrtchecks .ok   .mark{color:var(--ok)}
+  .qrtchecks .bad  .mark{color:#ff5d5d}
+  .qrtchecks .warn .mark{color:var(--warn)}
+  .qrtchecks .nm{flex:1}
+  .qrtchecks .dt{color:var(--dim);font-size:11px;text-align:right;max-width:52%;
+                 overflow-wrap:anywhere}
   .qrtsteps.bad{color:#ffb3b3}
   .qrtsteps{margin-top:12px;color:var(--dim);font-size:11px;line-height:1.7;
             font-family:ui-monospace,monospace;white-space:pre-line}
@@ -500,6 +512,7 @@
       is off the air</div>
     <div class="qrtmeta" id="qrt-meta"></div>
     <button id="qrt-on" class="qrtbtn">Go on the air</button>
+    <div class="qrtchecks" id="qrt-checks"></div>
     <div class="qrtsteps" id="qrt-steps"></div>
     <div class="qrtfoot">
       <span>QSO log is kept on disk</span>
@@ -1059,18 +1072,41 @@ function showQrt(idle, st){
   $("#qrt-meta").textContent = st.at ? `closed down at ${st.at} UTC` : "";
   $("#qrt-steps").textContent = (st.steps || []).join("\n");
   $("#qrt-steps").className = st.failed ? "qrtsteps bad" : "qrtsteps";
+  renderChecks(st.checks);
   $("#qrt-meta").textContent = st.failed
     ? "could not go on the air"
     : (st.at ? `closed down at ${st.at} UTC` : "");
   const b = $("#qrt-on");
   b.disabled = false;
-  b.textContent = st.failed ? "Try again" : "Go on the air";
+  b.textContent = st.starting ? "checking the station\u2026"
+                : st.failed ? "Try again" : "Go on the air";
+  b.disabled = !!st.starting;
   el.className = "qrt on";
+}
+// check names and details are ours, but they carry hamlib output and systemd
+// error text, so escape rather than trust
+function esc(t){
+  return String(t == null ? "" : t).replace(/[&<>"]/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+function renderChecks(checks){
+  const el = $("#qrt-checks");
+  if (!checks || !checks.length){ el.innerHTML = ""; return; }
+  el.innerHTML = checks.map(c => {
+    // a failed advisory check is worth seeing but does not keep you off the air
+    const cls = c.ok ? "ok" : (c.critical ? "bad" : "warn");
+    const mark = c.ok ? "\u2713" : (c.critical ? "\u2717" : "!");
+    return `<div class="ck ${cls}"><span class="mark">${mark}</span>`
+         + `<span class="nm">${esc(c.name)}</span>`
+         + `<span class="dt">${esc(c.detail||"")}</span></div>`;
+  }).join("");
 }
 $("#qrt-on").onclick = () => {
   const b = $("#qrt-on");
-  b.disabled = true; b.textContent = "bringing the station up\u2026";
-  $("#qrt-steps").textContent = "powering the radio, starting WSJT-X\u2026";
+  b.disabled = true; b.textContent = "checking the station\u2026";
+  $("#qrt-steps").textContent = "powering the radio, starting WSJT-X, "
+                              + "then testing every link\u2026";
+  $("#qrt-checks").innerHTML = "";
   ws.send(JSON.stringify({action:"station", state:"running"}));
 };
 $("#qrt-set").onclick = () => { $("#qrt").className = "qrt"; };
