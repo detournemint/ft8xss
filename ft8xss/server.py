@@ -38,9 +38,10 @@ LOG_ADIF = Path(_env("ADIF", str(Path.home() / "ft8xss-uploads.adif")))
 # Which WSJT-X window and service to drive when the headless helper is used.
 WSJTX_WINDOW = _env("WSJTX_WINDOW", "WSJT-X")
 WSJTX_UNIT = _env("WSJTX_UNIT", "wsjtx.service")
-WORKED_FILES = [
-    Path.home() / ".local/share/WSJT-X/wsjtx_log.adi",
-]
+# WSJT-X's ADIF log. Override to point at a different logbook, or at test
+# data when producing screenshots.
+WORKED_FILES = [Path(_env("LOG", str(Path.home() /
+                                     ".local/share/WSJT-X/wsjtx_log.adi")))]
 STATIC = Path(__file__).parent / "static"
 XDOTOOL_DISPLAY = _env("DISPLAY_NUM", ":99")
 # Auto-arming Enable Tx means the station calls CQ unattended whenever

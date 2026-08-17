@@ -51,6 +51,9 @@ Ideas credited to the projects they came from — see README for links.
 
 ## Own ideas not yet built
 
+- [x] Hash routing so tabs are bookmarkable (`#log`).
+- [x] Configurable logbook path, so demos and tests need not touch the real log.
+
 - [ ] Alerting when a new DXCC entity appears — browser notification or sound.
 - [ ] Persist the decode buffer across restarts.
 - [ ] History of what the service did: tunes, band changes, arm/stop events.

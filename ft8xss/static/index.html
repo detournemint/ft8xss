@@ -711,13 +711,21 @@ applyLayout(); measureChrome(); setInterval(measureChrome, 3000);
 
 /* ---------- logbook tab ---------- */
 let logData = null, logMap = null, logSort = "date", logDesc = true;
-document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
-  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x===b));
-  const log = b.dataset.view === "log";
+function showView(view){
+  const log = view === "log";
+  document.querySelectorAll(".tab").forEach(x =>
+    x.classList.toggle("on", x.dataset.view === view));
   $("#view-operate").style.display = log ? "none" : "";
   $("#view-log").classList.toggle("on", log);
   if (log && !logData) loadLog(); else if (log) drawLogMap();
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
+  location.hash = b.dataset.view === "log" ? "#log" : "";
+  showView(b.dataset.view);
 });
+window.addEventListener("hashchange",
+  () => showView(location.hash === "#log" ? "log" : "operate"));
+if (location.hash === "#log") showView("log");
 async function loadLog(){
   try {
     const r = await fetch("/api/log"); logData = await r.json();

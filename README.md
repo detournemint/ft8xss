@@ -7,6 +7,11 @@ laptop or tablet.
 > **This software keys your transmitter.** You are the control operator. Read
 > the safety notes below before running it.
 
+![Operate view](docs/images/operate.png)
+
+*Band activity, current QSO, azimuthal map, propagation and rig telemetry.
+Screenshots use synthetic data — see `docs/demo_feed.py`.*
+
 ## What makes it different
 
 Other web FT8 projects either implement their own modem in the browser or embed
@@ -32,6 +37,10 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
 - **Who hears me** — live PSK Reporter reception reports
 - **Azimuthal map** centred on your QTH: true bearing and distance
 - **QRZ photos** on callsign hover
+
+### Logbook
+
+![Logbook](docs/images/logbook.png)
 
 ## Safety
 
