@@ -42,6 +42,20 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
 
 ![Logbook](docs/images/logbook.png)
 
+### Settings
+
+![Settings](docs/images/settings.png)
+
+Everything configurable from the browser. Values are written to an env file
+(mode 600, since it holds your API key) and fields that need a service restart
+are marked.
+
+### Diagnostics
+
+If something is not working, **download diagnostics** from the Radio panel and
+attach it to an issue. It collects versions, radio and audio device detection,
+live station state, recent errors and the log — with API keys redacted.
+
 ## Safety
 
 - **Dead-man switch.** If the browser driving the station stops responding while

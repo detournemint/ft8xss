@@ -18,8 +18,10 @@ from pathlib import Path
 
 from aiohttp import web, ClientSession
 
+import diag
 import dxcc
 import gui
+import settings
 from bandsetup import BandSetup
 
 MAGIC = 0xADBCCBDA
@@ -35,6 +37,7 @@ BIND_ADDR = _env("BIND", "0.0.0.0")
 MY_GRID = _env("GRID").strip().upper()
 MY_CALL = _env("CALL").strip().upper()
 QRZ_KEY = _env("QRZ_KEY").strip()
+diag.register_secret(QRZ_KEY)
 LOG_ADIF = Path(_env("ADIF", str(Path.home() / "ft8xss-uploads.adif")))
 # Which WSJT-X window and service to drive when the headless helper is used.
 WSJTX_WINDOW = _env("WSJTX_WINDOW", "WSJT-X")
@@ -255,7 +258,7 @@ async def _rearm_after_qso():
     await asyncio.sleep(4)
     if ST.status.get("tx_enabled") is False:
         ok = await arm_tx()
-        print(f"[armtx] re-armed after QSO: {ok}", flush=True)
+        diag.log(f"[armtx] re-armed after QSO: {ok}")
 
 
 async def _push_card(call):
@@ -270,7 +273,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
 
     def connection_made(self, transport):
         self.transport = transport
-        print(f"[udp] listening on :{UDP_PORT}", flush=True)
+        diag.log(f"[udp] listening on :{UDP_PORT}")
 
     def datagram_received(self, data, addr):
         try:
@@ -294,7 +297,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
         except EOFError:
             pass
         except Exception as e:
-            print(f"[udp] parse error type={ptype}: {e}", flush=True)
+            diag.log(f"[udp] parse error type={ptype}: {e}")
 
     # --- packet handlers -------------------------------------------------
     def _status(self, r):
@@ -339,8 +342,8 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
                   and now - getattr(ST, "last_tx_at", 0) < 12.0)
         if txm and (started or changed) and not recent:
             if _env("DEBUG_TX"):
-                print(f"[tx] add started={started} changed={changed} "
-                      f"prev_tx={prev.get('transmitting')} msg={txm!r}", flush=True)
+                diag.log(f"[tx] add started={started} changed={changed} "
+                      f"prev_tx={prev.get('transmitting')} msg={txm!r}")
             ST.last_tx_msg = txm
             ST.last_tx_at = now
             ST.seq += 1
@@ -570,6 +573,22 @@ async def ws_handler(req):
             elif act == "beat":
                 ST.last_beat = time.time()
                 ST.ever_beat = True
+            elif act == "power":
+                want = bool(req_msg.get("on"))
+                ok = False
+                if not want:
+                    # never cut power mid-transmission
+                    await full_stop()
+                    await asyncio.sleep(1)
+                resp = await rig_cmd(f"\\set_powerstat {1 if want else 0}")
+                ok = resp is not None and "RPRT 0" in resp
+                if ok:
+                    await asyncio.sleep(3 if want else 1)
+                    ST.rig["power"] = want
+                    await ST.broadcast("rig", ST.rig)
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "power", "ok": ok,
+                    "who": "radio on" if want else "radio off"}}))
             elif act == "bandsetup":
                 b = band_of(ST.status.get("dial"))
                 asyncio.create_task(band_setup(b))
@@ -704,11 +723,15 @@ async def rig_poll():
                     rig["strength"] = int(float(s))
                 except (TypeError, ValueError):
                     pass
+                ps = await rig_cmd("\\get_powerstat")
+                if ps in ("0", "1"):
+                    rig["power"] = ps == "1"
             rig["ok"] = True
             ST.rig = rig
             await ST.broadcast("rig", rig)
         except Exception as e:
             ST.rig = {"ok": False, "error": type(e).__name__}
+            diag.error(f"[rig] {type(e).__name__}: {e}")
         await asyncio.sleep(0.7 if ST.rig.get("ptt") else 2.5)
 
 
@@ -789,7 +812,7 @@ async def run_tuner(swr_seen, manual=False):
     ST.tune["msg"] = (f"tuned at {datetime.now(timezone.utc):%H:%M} "
                       f"(SWR was {swr_seen:.1f})") if ok else f"tune failed: {resp}"
     await ST.broadcast("tune", ST.tune)
-    print(f"[tune] swr={swr_seen:.2f} manual={manual} ok={ok}", flush=True)
+    diag.log(f"[tune] swr={swr_seen:.2f} manual={manual} ok={ok}")
     return ok
 
 
@@ -837,7 +860,7 @@ async def seed_from_qrz():
     """The local ADIF only covers recent QSOs, so 'new DXCC' would be wrong.
     Pull the full QRZ logbook once at startup for an accurate worked set."""
     if not QRZ_KEY:
-        print("[qrz] no key; worked set is local ADIF only", flush=True)
+        diag.log("[qrz] no key; worked set is local ADIF only")
         return
     try:
         async with ClientSession() as sess:
@@ -852,16 +875,16 @@ async def seed_from_qrz():
         adif = _html.unescape(adif)
         calls = {c.upper() for c in re.findall(r"<call:\d+>([^<\s]+)", adif, re.I)}
         if not calls:
-            print(f"[qrz] fetch returned no calls ({body[:80]})", flush=True)
+            diag.log(f"[qrz] fetch returned no calls ({body[:80]})")
             return
         before_c, before_e = len(ST.worked), len(ST.worked_entities)
         ST.worked |= calls
         ST.worked_entities |= {e for e in (dxcc.entity(c) for c in calls) if e}
-        print(f"[qrz] seeded {len(calls)} calls: worked {before_c}->{len(ST.worked)}, "
-              f"entities {before_e}->{len(ST.worked_entities)}", flush=True)
+        diag.log(f"[qrz] seeded {len(calls)} calls: worked {before_c}->{len(ST.worked)}, "
+              f"entities {before_e}->{len(ST.worked_entities)}")
         await ST.broadcast("entities", sorted(ST.worked_entities))
     except Exception as e:
-        print(f"[qrz] seed failed: {type(e).__name__}: {e}", flush=True)
+        diag.log(f"[qrz] seed failed: {type(e).__name__}: {e}")
 
 
 # Calibrated Pwr-slider attenuation per band (tenths of a dB), measured with
@@ -884,39 +907,11 @@ def save_drive():
         pass
 
 
-SPLIT_VARIANTS = {
-    "none": "split_mode_none",
-    "rig": "split_mode_rig",
-    "fake": "split_mode_emulate",
-}
-
-
-def set_split_mode(mode="fake"):
-    """Enable WSJT-X's own 'Fake It' split: it shifts the VFO on transmit so the
-    audio tone sits near the middle of the SSB filter, avoiding power roll-off
-    and splatter at the passband edges. Idea surfaced by ok1cdj/FT8web; WSJT-X
-    implements it natively, so we just turn it on.
-    """
-    want = SPLIT_VARIANTS.get(mode, "split_mode_emulate")
-    ini = Path.home() / ".config/WSJT-X.ini"
-    try:
-        txt = ini.read_text(errors="ignore")
-    except OSError:
-        return False
-    m = re.search(r"^SplitMode=@Variant\(.*?\)$", txt, re.M)
-    if not m:
-        return False
-    cur = m.group(0)
-    if want in cur:
-        return True
-    # the Qt QVariant blob length-prefixes the enum name (len + 1 for the NUL)
-    new = re.sub(r"\\0\\0\\0\\x[0-9a-f]{2}split_mode_[a-z]+\\0",
-                 lambda _: "\\0\\0\\0\\x%02x%s\\0" % (len(want) + 1, want),
-                 cur)
-    if new == cur:
-        return False
-    ini.write_text(txt.replace(cur, new))
-    return True
+# NOTE: WSJT-X's "Fake It" split (SplitMode=split_mode_emulate) is deliberately
+# NOT enabled here. On an FT-991A driven through Hamlib NET rigctl it shifted the
+# VFO without compensating the audio offset, putting every transmission ~2 kHz
+# off frequency -- inaudible to everyone, with no error anywhere. If you want it,
+# set it in WSJT-X yourself and verify with PSK Reporter that you are still heard.
 
 
 async def restart_wsjtx_with(att):
@@ -938,8 +933,8 @@ async def restart_wsjtx_with(att):
         if ST.status.get("dial") and ST.status.get("tx_enabled") is not None:
             break
     await asyncio.sleep(3)
-    print(f"[band] wsjtx back: dial={ST.status.get('dial')} "
-          f"tx_enabled={ST.status.get('tx_enabled')}", flush=True)
+    diag.log(f"[band] wsjtx back: dial={ST.status.get('dial')} "
+          f"tx_enabled={ST.status.get('tx_enabled')}")
 
 
 async def _cq_once():
@@ -951,10 +946,10 @@ async def _cq_once():
         ok = await set_tx(True)
         if ok:
             break
-        print(f"[band] arm attempt {attempt + 1} failed", flush=True)
+        diag.log(f"[band] arm attempt {attempt + 1} failed")
         await asyncio.sleep(2)
     else:
-        print("[band] could not arm TX", flush=True)
+        diag.log("[band] could not arm TX")
         return False
     grid = MY_GRID[:4].upper()
     PROTO.send_free_text(f"CQ {MY_CALL} {grid}", send=True)
@@ -982,13 +977,14 @@ async def band_setup(band):
         bs = BandSetup(
             rig_cmd=rig_cmd, set_tx=set_tx, send_cq=_cq_once,
             get_status=lambda: ST.status,
-            log=lambda m: print(m, flush=True),
+            log=diag.log,
             restart_wsjtx=restart_wsjtx_with, target_watts=target)
         res = await bs.run(band)
         ST.bandfix = {"band": band, "state": "done", **(res or {"ok": False})}
     except Exception as e:
+        diag.exception(f"[band] {band} setup failed", e)
         ST.bandfix = {"band": band, "state": "error", "err": f"{type(e).__name__}: {e}"}
-        print(f"[band] {band}: {type(e).__name__}: {e}", flush=True)
+        diag.log(f"[band] {band}: {type(e).__name__}: {e}")
     finally:
         ST.busy_band = False
     await ST.broadcast("bandfix", ST.bandfix)
@@ -1042,8 +1038,8 @@ async def deadman():
         if ST.status.get("tx_enabled") is True and not live and stale > DEADMAN_SECS:
             if not tripped:
                 tripped = True
-                print(f"[deadman] no browser for {stale:.0f}s and TX armed "
-                      f"-- stopping", flush=True)
+                diag.log(f"[deadman] no browser for {stale:.0f}s and TX armed "
+                      f"-- stopping")
                 await full_stop()
                 ST.txfix = {"state": "deadman", "note": f"no client for {stale:.0f}s"}
                 await ST.broadcast("txfix", ST.txfix)
@@ -1079,8 +1075,8 @@ async def tx_watchdog():
         attempts += 1
         ok = await arm_tx()
         ST.txfix = {"state": "recovering", "attempt": attempts, "ok": ok}
-        print(f"[txwd] tx disabled {now - disabled_since:.0f}s; "
-              f"re-arm attempt {attempts} -> {ok}", flush=True)
+        diag.log(f"[txwd] tx disabled {now - disabled_since:.0f}s; "
+              f"re-arm attempt {attempts} -> {ok}")
         await ST.broadcast("txfix", ST.txfix)
         disabled_since = now if not ok else None
 
@@ -1113,6 +1109,7 @@ async def psk_poll():
             await ST.broadcast("psk", ST.psk)
         except Exception as e:
             ST.psk["error"] = type(e).__name__
+            diag.error(f"[psk] {type(e).__name__}: {e}")
         await asyncio.sleep(180)
 
 
@@ -1157,6 +1154,7 @@ async def bands_poll():
             await ST.broadcast("bands", ST.bands)
         except Exception as e:
             ST.bands["error"] = type(e).__name__
+            diag.error(f"[bands] {type(e).__name__}: {e}")
         await asyncio.sleep(900)
 
 
@@ -1190,8 +1188,8 @@ async def full_stop():
     ST.txfix = {"state": "halted", "tx_enabled": ST.status.get("tx_enabled"),
                 "full": bool(gui.available())}
     await ST.broadcast("txfix", ST.txfix)
-    print(f"[halt] full stop; tx_enabled now "
-          f"{ST.status.get('tx_enabled')} (set_tx ok={off})", flush=True)
+    diag.log(f"[halt] full stop; tx_enabled now "
+          f"{ST.status.get('tx_enabled')} (set_tx ok={off})")
     # without GUI automation, halting the transmission is still a success
     return True if not gui.available() else off
 
@@ -1273,6 +1271,63 @@ async def api_log(req):
     })
 
 
+def _diag_state():
+    st, rig = ST.status, ST.rig or {}
+    return {
+        "wsjtx_udp": str(ST.wsjtx_addr), "wsjtx_id": ST.wsjtx_id,
+        "dial": st.get("dial"), "mode": st.get("mode"),
+        "tx_enabled": st.get("tx_enabled"), "transmitting": st.get("transmitting"),
+        "tx_df": st.get("tx_df"), "rx_df": st.get("rx_df"),
+        "config_name": st.get("config_name"),
+        "gui_automation": f"{gui.available()} ({gui.reason()})",
+        "rig_ok": rig.get("ok"), "rig_power": rig.get("power"),
+        "last_tx_peak": rig.get("peak"),
+        "decodes_buffered": len(ST.decodes),
+        "worked_calls": len(ST.worked), "worked_entities": len(ST.worked_entities),
+        "qrz_uploads": ST.uploads,
+        "psk_receivers": (ST.psk or {}).get("count"),
+        "clients": len(ST.clients),
+        "last_decode_age_s": (round(time.time() - ST.last_decode_ts)
+                              if ST.last_decode_ts else None),
+    }
+
+
+async def api_settings(req):
+    if req.method == "GET":
+        return web.json_response({"fields": settings.current(),
+                                  "file": str(settings.ENV_FILE)})
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad JSON"}, status=400)
+    written, restart = settings.save(body.get("values") or {})
+    diag.log(f"[settings] updated {written} (restart_needed={restart})")
+    return web.json_response({"ok": True, "written": written,
+                              "restart_needed": restart})
+
+
+async def api_restart(req):
+    """Restart ourselves so changed settings take effect."""
+    diag.log("[settings] restart requested from the web interface")
+
+    async def bye():
+        await asyncio.sleep(0.5)
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "restart", "ft8xss.service",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await pr.wait()
+
+    asyncio.create_task(bye())
+    return web.json_response({"ok": True})
+
+
+async def api_diagnostics(req):
+    text = diag.bundle(state_fn=_diag_state)
+    return web.Response(text=text, content_type="text/plain",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="ft8xss-diagnostics.txt"'})
+
+
 async def api_photo(req):
     return web.json_response(await qrz_photo(req.match_info["call"]))
 
@@ -1281,9 +1336,18 @@ async def api_call(req):
     return web.json_response(await lookup_call(req.match_info["call"]))
 
 
+def _task_exception(loop, ctx):
+    exc = ctx.get("exception")
+    if exc:
+        diag.exception("[task] unhandled", exc)
+    else:
+        diag.error(f"[task] {ctx.get('message')}")
+
+
 async def main():
     global PROTO
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_task_exception)
     PROTO = WsjtxProtocol(loop)
     await loop.create_datagram_endpoint(lambda: PROTO, local_addr=("0.0.0.0", UDP_PORT))
     asyncio.create_task(rig_poll())
@@ -1300,18 +1364,20 @@ async def main():
     app.router.add_get("/api/call/{call}", api_call)
     app.router.add_get("/api/log", api_log)
     app.router.add_get("/api/photo/{call}", api_photo)
+    app.router.add_get("/api/diagnostics", api_diagnostics)
+    app.router.add_get("/api/settings", api_settings)
+    app.router.add_post("/api/settings", api_settings)
+    app.router.add_post("/api/restart", api_restart)
     app.router.add_static("/static/", STATIC)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, BIND_ADDR, HTTP_PORT).start()
-    print(f"[gui] automation: "
-          f"{'available -- ' if gui.available() else 'unavailable -- '}{gui.reason()}",
-          flush=True)
+    diag.log(f"[gui] automation: "
+          f"{'available -- ' if gui.available() else 'unavailable -- '}{gui.reason()}")
     if not MY_CALL or not MY_GRID:
-        print("[config] FT8XSS_CALL and FT8XSS_GRID are required "
-              "(set them in ~/.config/ft8xss.env)", flush=True)
-    print(f"[http] http://{BIND_ADDR}:{HTTP_PORT}  (worked calls loaded: {len(ST.worked)})",
-          flush=True)
+        diag.log("[config] FT8XSS_CALL and FT8XSS_GRID are required "
+              "(set them in ~/.config/ft8xss.env)")
+    diag.log(f"[http] http://{BIND_ADDR}:{HTTP_PORT}  (worked calls loaded: {len(ST.worked)})")
     await asyncio.Event().wait()
 
 

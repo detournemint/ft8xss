@@ -16,7 +16,8 @@ Ideas credited to the projects they came from — see README for links.
 - [ ] **Radio auto-detection.** Enumerate `/dev/ttyUSB*` and `/dev/ttyACM*`,
       read USB VID/PID, map to a hamlib model, verify by starting rigctld and
       reading the frequency back. Pick the audio codec on the same USB device.
-- [ ] **Config file** instead of environment variables only.
+- [x] **Settings tab** — schema-driven form for every setting, written to an
+      env file with 0600 permissions.
 - [x] Licence: GPL-3.0, matching the WSJT-X ecosystem.
 - [x] Remove hardcoded callsign/grid defaults; env prefix is now FT8XSS_.
 - [ ] Install docs for both **local** (WSJT-X and ft8xss on one desktop) and
@@ -26,9 +27,12 @@ Ideas credited to the projects they came from — see README for links.
 
 - [x] **Browser dead-man switch** — no heartbeat while armed → stop
       transmitting. *(idea: w5eez/ft8web)*
-- [x] **Fake-split transmit** — keep the audio tone near the middle of the SSB
-      filter to avoid roll-off and splatter at the passband edges. WSJT-X
-      implements this natively as `SplitMode=split_mode_emulate`; we enable it.
+- [ ] ~~**Fake-split transmit**~~ — **tried and reverted.** WSJT-X implements it
+      natively (`SplitMode=split_mode_emulate`), but on an FT-991A through Hamlib
+      NET rigctl it shifted the VFO without compensating the audio offset: every
+      transmission went out ~2 kHz high and nobody heard us, with no error
+      reported anywhere. Worth revisiting with direct serial CAT or another rig,
+      but it must be verified against PSK Reporter before being enabled again.
       *(idea: ok1cdj/FT8web)*
 
 ## Still worth taking
@@ -50,6 +54,9 @@ Ideas credited to the projects they came from — see README for links.
       consume our data the way they consume WSJT-X UDP. *(ok1cdj)*
 
 ## Own ideas not yet built
+
+- [x] Error logging with a redacted diagnostics bundle users can attach to
+      issues (`/api/diagnostics`).
 
 - [x] Hash routing so tabs are bookmarkable (`#log`).
 - [x] Configurable logbook path, so demos and tests need not touch the real log.

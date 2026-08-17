@@ -134,10 +134,19 @@ class BandSetup:
                 self.log(f"[band] {band}: att={att} PO={po:.1f}W "
                          f"ALC={alc:.3f} SWR={m['swr']:.2f}")
 
-                good = alc <= ALC_MAX and po >= PO_FLOOR * self.target_watts
-                if best is None or (alc <= ALC_MAX and po > best[1]["po"]):
+                # ALC is a hard constraint, not a tiebreak: a compressed
+                # measurement must never win on raw power. Among ALC-compliant
+                # results take the most power; keep a non-compliant one only as
+                # a fallback until something compliant is found.
+                ok_alc = alc <= ALC_MAX
+                best_ok = best is not None and best[1]["alc"] <= ALC_MAX
+                if ok_alc and (not best_ok or po > best[1]["po"]):
                     best = (att, dict(m))
-                if good:
+                elif best is None:
+                    best = (att, dict(m))
+                elif not best_ok and alc < best[1]["alc"]:
+                    best = (att, dict(m))       # still over, but less so
+                if ok_alc and po >= PO_FLOOR * self.target_watts:
                     break
 
                 # 2. move drive: ALC is the hard constraint, power the goal

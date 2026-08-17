@@ -16,9 +16,15 @@
          padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
   .pill{padding:3px 9px;border:1px solid var(--line);border-radius:99px;white-space:nowrap}
   .pill b{color:var(--ink)} .pill span{color:var(--dim)}
+  .brand{font-weight:700;letter-spacing:.06em;color:#4aa3ff;padding-right:4px}
   .pill select{background:#222833;color:var(--ink);border:1px solid var(--line);
                border-radius:5px;padding:2px 4px;font:inherit;font-size:12px;margin:0 4px}
   .pill select:disabled{opacity:.5}
+  .pwrbtn{background:#222833;border:1px solid var(--line);color:var(--ink);
+          border-radius:5px;padding:1px 8px;margin-left:6px;cursor:pointer;
+          font:inherit;font-size:11px}
+  .pwrbtn.on{background:#14301f;border-color:#2b7a4b;color:#7ff0ad}
+  .pwrbtn.off{background:#3a1414;border-color:#7a2020;color:#ff9090}
   .clock{margin-left:auto;text-align:right;line-height:1.25;
          font-variant-numeric:tabular-nums}
   .clock b{font-size:15px;letter-spacing:.02em}
@@ -165,6 +171,17 @@
   .entlist{max-height:300px;overflow:auto;padding:4px 0}
   .entlist div{display:flex;justify-content:space-between;padding:2px 12px;font-size:11px}
   .entlist .n{color:var(--dim)}
+  .setform{padding:4px 0}
+  .setsec{padding:8px 12px 2px;color:#4aa3ff;font-size:11px;letter-spacing:.1em;
+          text-transform:uppercase;border-top:1px solid var(--line);margin-top:6px}
+  .setrow{display:grid;grid-template-columns:220px 260px 1fr;gap:10px;
+          align-items:baseline;padding:5px 12px}
+  .setrow label{color:var(--ink);font-size:12px}
+  .setrow .hint{color:var(--dim);font-size:11px}
+  .setrow input[type=text],.setrow input[type=number],.setrow input[type=password]{
+    background:#222833;color:var(--ink);border:1px solid var(--line);
+    border-radius:5px;padding:4px 7px;font:inherit;font-size:12px;width:100%}
+  .setrow .rs{color:#f0a02c;font-size:10px;margin-left:6px}
   #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
          background:#1d3a5c;border:1px solid #2f6ea8;padding:8px 16px;border-radius:8px;
          opacity:0;transition:opacity .2s;pointer-events:none}
@@ -173,7 +190,9 @@
 </head>
 <body>
 <header>
-  <div class="pill"><b id="me">—</b> <span id="grid"></span></div>
+  <div class="brand">ft8xss</div>
+  <div class="pill"><span>station</span> <b id="me">—</b>
+    <span>grid</span> <b id="grid">—</b></div>
   <div class="pill"><span>band</span>
     <select id="bandsel">
       <option value="">—</option>
@@ -196,6 +215,9 @@
   <div class="pill" id="txstate">idle</div>
   <div class="pill"><span>dx</span> <b id="dxcall">—</b></div>
   <div class="pill"><span>cfg</span> <b id="cfg">—</b></div>
+  <div class="pill"><span>radio</span>
+    <b id="pwr-state">—</b>
+    <button id="pwr-btn" class="pwrbtn">off</button></div>
   <div class="pill"><span>link</span> <b id="link">connecting…</b></div>
   <div class="clock">
     <div><b id="clk-utc">--:--:--</b> <span>UTC</span></div>
@@ -225,6 +247,7 @@
 <nav class="tabs">
   <button class="tab on" data-view="operate">Operate</button>
   <button class="tab" data-view="log">Logbook</button>
+  <button class="tab" data-view="settings">Settings</button>
 </nav>
 
 <main id="view-operate">
@@ -297,6 +320,11 @@
       <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
       <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
       <div style="padding:6px 12px;display:flex;gap:6px"><button id="tunebtn">Run tuner</button><button id="bandbtn">Setup band</button></div>
+      <div style="padding:6px 12px">
+        <a id="diagbtn" href="/api/diagnostics" download
+           style="font-size:11px;color:var(--dim);border-bottom:1px dotted #4a5666;
+                  text-decoration:none">download diagnostics</a>
+      </div>
       <div id="gui-note" class="advice warn" style="display:none"></div>
       <div id="r-advice" class="advice"></div>
     </section>
@@ -351,6 +379,18 @@
   </div>
 </section>
 
+<section id="view-settings" class="logview">
+  <div class="panel" style="max-width:920px">
+    <h2>Settings <span id="set-file" class="muted"></span></h2>
+    <div id="set-form" class="setform"></div>
+    <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
+      <button id="set-save" class="go">Save</button>
+      <button id="set-restart">Save &amp; restart</button>
+      <span id="set-msg" class="muted" style="align-self:center"></span>
+    </div>
+  </div>
+</section>
+
 <div id="ptip"></div>
 <div id="toast"></div>
 
@@ -376,7 +416,9 @@ function connect(){
     const {type, data} = JSON.parse(ev.data);
     if (type === "snapshot"){
       status = data.status||{}; decodes = data.decodes||[];
-      $("#me").textContent = data.me.call; $("#grid").textContent = data.me.grid;
+      $("#me").textContent = data.me.call || "not set";
+      $("#grid").textContent = data.me.grid || "not set";
+      document.title = data.me.call ? `ft8xss — ${data.me.call}` : "ft8xss";
       setUploads(data.uploads); setRig(data.rig); setPsk(data.psk);
       setBands(data.bands); setTune(data.tune); setBandfix(data.bandfix);
       applyCaps(data.caps);
@@ -402,6 +444,7 @@ function connect(){
       if (data.action === "call") toast(data.ok ? `calling ${data.who}` : "call failed — no WSJT-X link", !data.ok);
       if (data.action === "halt") toast(data.ok ? "STOPPED — TX disabled until you Call CQ" : "halt incomplete — check the radio", !data.ok);
       if (data.action === "cq") toast(data.ok ? `calling ${data.who}` : "CQ failed — no WSJT-X link", !data.ok);
+      if (data.action === "power") toast(data.ok ? data.who : "power command failed", !data.ok);
       if (data.action === "bandsetup") toast(data.ok ? `band setup running on ${data.who}` : "no band known", !data.ok);
       if (data.action === "tune") toast(data.ok ? "tuner run" : "tune failed / skipped", !data.ok);
       if (data.action === "click") toast(data.ok ? `toggled ${data.who}` : `could not reach ${data.who}`, !data.ok);
@@ -529,6 +572,12 @@ $("#halt").onclick = () => ws.send(JSON.stringify({action:"halt"}));
 $("#cq").onclick = () => ws.send(JSON.stringify({action:"cq"}));
 $("#armtx").onclick = () => ws.send(JSON.stringify({action:"armtx"}));
 
+$("#pwr-btn").onclick = () => {
+  const want = $("#pwr-btn").dataset.want === "1";
+  if (!want && !confirm("Turn the radio off? Any transmission is stopped first."))
+    return;
+  ws.send(JSON.stringify({action:"power", on: want}));
+};
 $("#bandsel").onchange = e => {
   const hz = +e.target.value; if (!hz) return;
   const sel = e.target; sel.dataset.busy = "1"; sel.disabled = true;
@@ -728,20 +777,77 @@ applyLayout(); measureChrome(); setInterval(measureChrome, 3000);
 /* ---------- logbook tab ---------- */
 let logData = null, logMap = null, logSort = "date", logDesc = true;
 function showView(view){
-  const log = view === "log";
   document.querySelectorAll(".tab").forEach(x =>
     x.classList.toggle("on", x.dataset.view === view));
-  $("#view-operate").style.display = log ? "none" : "";
-  $("#view-log").classList.toggle("on", log);
-  if (log && !logData) loadLog(); else if (log) drawLogMap();
+  $("#view-operate").style.display = view === "operate" ? "" : "none";
+  $("#view-log").classList.toggle("on", view === "log");
+  $("#view-settings").classList.toggle("on", view === "settings");
+  if (view === "log"){ if (!logData) loadLog(); else drawLogMap(); }
+  if (view === "settings") loadSettings();
 }
+
+/* ---------- settings ---------- */
+async function loadSettings(){
+  let d;
+  try { d = await (await fetch("/api/settings")).json(); }
+  catch(e){ $("#set-form").innerHTML = `<div class="err" style="padding:12px">${e}</div>`; return; }
+  $("#set-file").textContent = d.file;
+  let html = "", section = null;
+  for (const f of d.fields){
+    if (f.section !== section){ section = f.section;
+      html += `<div class="setsec">${section}</div>`; }
+    const rs = f.restart ? '<span class="rs">restart</span>' : "";
+    let input;
+    if (f.type === "bool"){
+      input = `<input type="checkbox" data-k="${f.key}" ${f.value==="true"?"checked":""}>`;
+    } else {
+      const t = f.type === "password" ? "password" : (f.type === "number" ? "number" : "text");
+      input = `<input type="${t}" data-k="${f.key}" value="${f.value.replace(/"/g,"&quot;")}">`;
+    }
+    html += `<div class="setrow"><label>${f.label}${rs}</label>`
+          + `<div>${input}</div><div class="hint">${f.help}</div></div>`;
+  }
+  $("#set-form").innerHTML = html;
+}
+function collectSettings(){
+  const vals = {};
+  document.querySelectorAll("#set-form [data-k]").forEach(el => {
+    vals[el.dataset.k] = el.type === "checkbox" ? (el.checked ? "1" : "0") : el.value;
+  });
+  return vals;
+}
+async function saveSettings(thenRestart){
+  const msg = $("#set-msg"); msg.textContent = "saving…"; msg.className = "muted";
+  try {
+    const r = await fetch("/api/settings", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({values: collectSettings()})});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "save failed");
+    if (thenRestart){
+      msg.textContent = "saved — restarting…";
+      await fetch("/api/restart", {method:"POST"});
+      setTimeout(() => location.reload(), 6000);
+    } else {
+      msg.textContent = d.restart_needed
+        ? `saved (${d.written.length}) — restart required for some changes`
+        : `saved (${d.written.length}) — applied`;
+      msg.className = d.restart_needed ? "warn" : "";
+    }
+  } catch(e){ msg.textContent = String(e); msg.className = "err"; }
+}
+$("#set-save").onclick = () => saveSettings(false);
+$("#set-restart").onclick = () => {
+  if (confirm("Save and restart ft8xss? The interface will reconnect."))
+    saveSettings(true);
+};
 document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
-  location.hash = b.dataset.view === "log" ? "#log" : "";
+  location.hash = b.dataset.view === "operate" ? "" : "#" + b.dataset.view;
   showView(b.dataset.view);
 });
-window.addEventListener("hashchange",
-  () => showView(location.hash === "#log" ? "log" : "operate"));
-if (location.hash === "#log") showView("log");
+const viewFromHash = () => ({"#log":"log","#settings":"settings"})[location.hash] || "operate";
+window.addEventListener("hashchange", () => showView(viewFromHash()));
+if (location.hash) showView(viewFromHash());
 async function loadLog(){
   try {
     const r = await fetch("/api/log"); logData = await r.json();
@@ -931,6 +1037,14 @@ setInterval(updateWarn, 2000);
 
 function setRig(r){
   if (r && r.ok){ lastRig = r; if (status.transmitting) updateTxBar(); }
+  if (r && r.power !== undefined){
+    const on = !!r.power, st = $("#pwr-state"), b = $("#pwr-btn");
+    st.textContent = on ? "on" : "off";
+    st.style.color = on ? "var(--ok)" : "var(--dim)";
+    b.textContent = on ? "turn off" : "turn on";
+    b.className = "pwrbtn " + (on ? "off" : "on");
+    b.dataset.want = on ? "0" : "1";
+  }
   if (!r || !r.ok){ $("#r-advice").textContent = "rigctld unreachable";
                     $("#r-advice").className="advice bad"; return; }
   const pk = r.peak || {};
