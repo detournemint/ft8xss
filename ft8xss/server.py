@@ -263,6 +263,7 @@ class Station:
 DF_MIN, DF_MAX = 300, 2600
 DF_WIDTH = 60            # a signal is ~50 Hz wide, and WSJT-X steps by 60
 MAX_DF_STEPS = 40        # how far we will travel in one move
+DF_RECHECK = 300         # a move this big can change the drive
 AUTO_DF = _env("AUTO_DF", "1") == "1"
 
 
@@ -1430,6 +1431,17 @@ async def set_audio_freq(which, hz, why=""):
             now = ST.status.get(key)
             if now is not None and abs(now - hz) <= DF_WIDTH // 2:
                 diag.log(f"[audio] {which} {cur} -> {now} Hz {why}".rstrip())
+                # The rig's transmit filter is not flat. Moving the TX offset a
+                # long way -- particularly off the skirt and into the middle of
+                # the passband -- changes how much audio reaches the modulator,
+                # and with it the drive. A calibration made at the old offset no
+                # longer describes the new one, so let the check re-judge it.
+                if which == "tx" and abs(now - cur) >= DF_RECHECK:
+                    band = band_of(ST.status.get("dial"))
+                    if band in ST.checked_bands:
+                        ST.checked_bands.discard(band)
+                        diag.log(f"[audio] {band}: TX moved {cur}->{now} Hz, "
+                                 f"re-checking drive on the next transmission")
                 return True, f"{which.upper()} {now} Hz"
         now = ST.status.get(key)
         return False, f"{which.upper()} moved to {now} Hz, wanted {hz}"
