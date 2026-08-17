@@ -101,6 +101,7 @@
   <li><a href="#stalled-qso">…has repeated the same reply</a></li>
   <li><a href="#no-gui-automation">Must be done in WSJT-X</a></li>
   <li><a href="#waiting-for-wsjtx">Waiting for WSJT-X</a></li>
+  <li><a href="#radio-not-on-bus">Radio is not on the USB bus</a></li>
   <li><a href="#band-setup-interrupted">A band setup was interrupted</a></li>
   <li><a href="#setup-swr-abort">SWR too high to transmit safely</a></li>
   <li><a href="#drive-busy">Transmitting — wait for the over</a></li>
@@ -337,6 +338,39 @@
     On a desktop this is often the right arrangement — you are sitting in front
     of WSJT-X anyway. It matters most on a headless station.
   </p>
+</div>
+
+<div class="msg sev-stop" id="radio-not-on-bus">
+  <div class="quote">radio power on FAILED — the radio is not on the USB bus. It has to be switched on at the rig itself</div>
+  <h3>The radio is not merely off, it is gone<span class="pill stop">hands on</span></h3>
+  <p>
+    Powering a radio down over CAT does not always leave its USB interface
+    alive. Many rigs present their CAT bridge and audio codec through an
+    internal hub, and that hub can disappear along with the radio — after which
+    nothing on the computer can reach it, including the command to switch it
+    back on.
+  </p>
+  <p>
+    This is a one-way door. Going back on the air needs the power button on the
+    rig. There is no software route back.
+  </p>
+  <p>
+    Observed on an FT-991A: eight minutes after a CAT power-off, the internal
+    hub and everything on it left the bus and never came back.
+  </p>
+<pre style="font-family:var(--mono);font-size:12px;background:#11151a;
+     border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+     overflow-x:auto;color:var(--dim)">usb 1-2:   USB disconnect          &lt;- the radio's internal hub
+usb 1-2.1: CP2105 Dual USB to UART  (CAT and PTT)
+usb 1-2.2: USB Audio CODEC          (the rig's soundcard)</pre>
+  <dl>
+    <dt>Do</dt><dd>Switch the radio on at the front panel, then <b>Try again</b>.</dd>
+    <dt>Avoid</dt><dd>If your station is remote and you cannot reach the power
+      button, do not power the radio off from the browser. Stop WSJT-X and leave
+      the radio on instead.</dd>
+    <dt>Check</dt><dd><code>ls /dev/ttyUSB*</code> — if it is empty, the radio is
+      not on the bus and this is not a software fault.</dd>
+  </dl>
 </div>
 
 <div class="msg sev-info" id="waiting-for-wsjtx">

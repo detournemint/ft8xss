@@ -1699,6 +1699,22 @@ async def station_shutdown():
     return all("FAILED" not in x for x in steps)
 
 
+def radio_present():
+    """Is the radio on the USB bus at all?
+
+    Some rigs drop their USB interface entirely when powered down over CAT --
+    the FT-991A presents an internal hub carrying the CP2105 and the audio
+    codec, and all of it disappears. Once that happens nothing can power it back
+    on remotely, and reporting "power on FAILED" sends the operator looking for
+    a software fault that is not there.
+    """
+    port = _env("RIG_PORT", "")
+    if port:
+        return Path(port).exists()
+    return bool(list(Path("/dev").glob("ttyUSB*"))
+                or list(Path("/dev").glob("ttyACM*")))
+
+
 async def station_start():
     """Bring the station back up from idle. Does not transmit."""
     steps = []
@@ -1708,6 +1724,9 @@ async def station_start():
         steps.append("radio powered on")
         await asyncio.sleep(4)          # the rig needs a moment before CAT works
         ST.rig["power"] = True
+    elif not radio_present():
+        steps.append("radio power on FAILED — the radio is not on the USB bus. "
+                     "It has to be switched on at the rig itself")
     else:
         steps.append("radio power on FAILED")
 
@@ -1723,11 +1742,15 @@ async def station_start():
         steps.append(f"{unit} start FAILED ({type(e).__name__})")
     gui.invalidate()
 
-    ST.station = {"state": "running", "steps": steps,
+    ok = all("FAILED" not in x for x in steps)
+    # WSJT-X running without a radio is not a station on the air; saying so
+    # would replace the one screen that explains what is wrong with an empty one
+    ST.station = {"state": "running" if ok else "idle", "steps": steps,
+                  "failed": not ok,
                   "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
-    diag.log("[station] running: " + "; ".join(steps))
+    diag.log(f"[station] {'running' if ok else 'start failed'}: " + "; ".join(steps))
     await ST.broadcast("station", ST.station)
-    return all("FAILED" not in x for x in steps)
+    return ok
 
 
 async def evaluate_transmission(peak):

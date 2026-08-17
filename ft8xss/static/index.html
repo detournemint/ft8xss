@@ -158,6 +158,7 @@
           background:#14301f;border:1px solid #2b7a4b;color:#9df0c0}
   .qrtbtn:hover{background:#1a3d28}
   .qrtbtn:disabled{opacity:.55;cursor:default}
+  .qrtsteps.bad{color:#ffb3b3}
   .qrtsteps{margin-top:12px;color:var(--dim);font-size:11px;line-height:1.7;
             font-family:ui-monospace,monospace;white-space:pre-line}
   .qrtfoot{display:flex;justify-content:space-between;align-items:center;
@@ -1057,8 +1058,13 @@ function showQrt(idle, st){
   $("#qrt-grid").textContent = ($("#grid").textContent || "").trim();
   $("#qrt-meta").textContent = st.at ? `closed down at ${st.at} UTC` : "";
   $("#qrt-steps").textContent = (st.steps || []).join("\n");
+  $("#qrt-steps").className = st.failed ? "qrtsteps bad" : "qrtsteps";
+  $("#qrt-meta").textContent = st.failed
+    ? "could not go on the air"
+    : (st.at ? `closed down at ${st.at} UTC` : "");
   const b = $("#qrt-on");
-  b.disabled = false; b.textContent = "Go on the air";
+  b.disabled = false;
+  b.textContent = st.failed ? "Try again" : "Go on the air";
   el.className = "qrt on";
 }
 $("#qrt-on").onclick = () => {
@@ -1072,7 +1078,9 @@ $("#qrt-set").onclick = () => { $("#qrt").className = "qrt"; };
 $("#stn-stop").onclick = () => {
   if (!confirm("Shut the station down?\n\nStops transmitting, powers the radio "
              + "off and stops WSJT-X. The web server keeps running so you can "
-             + "start it again from here.")) return;
+             + "start it again from here.\n\nNote: some radios drop their USB "
+             + "connection when powered off over CAT. If yours does, going back "
+             + "on the air needs the power button on the rig itself.")) return;
   $("#stn-msg").textContent = "shutting down\u2026";
   ws.send(JSON.stringify({action:"station", state:"idle"}));
 };
