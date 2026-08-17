@@ -606,15 +606,23 @@ function renderStatus(){
 }
 
 /* ---------- table ---------- */
+// Newest first, always. `id` is the server's monotonic decode counter, which
+// is what to order on -- `tms` is milliseconds since UTC midnight and wraps, so
+// sorting on it puts last night's decodes above this morning's for the first
+// hours of every day. It stays in the row because the Reply packet needs it.
+const newestFirst = (a, b) => b.id - a.id;
+
 function visible(){
   let v = decodes.filter(d => d.sender);
-  if (filters.mine) return v.filter(d => d.tx).slice().sort((a,b)=>b.tms-a.tms).slice(0,150);
+  if (filters.mine) return v.filter(d => d.tx).slice().sort(newestFirst).slice(0,150);
   if (filters.cq) v = v.filter(d => d.cq || d.tx);
   if (filters.newonly) v = v.filter(d => !d.worked || d.tx);
   if (filters.tome) v = v.filter(d => d.to_me || d.tx);
   if (filters.newdx) v = v.filter(d => d.new_entity || d.tx);
-  const key = {snr:(a,b)=>b.snr-a.snr, time:(a,b)=>b.tms-a.tms,
-               km:(a,b)=>(b.km||0)-(a.km||0)}[sortKey];
+  // every sort breaks ties by newest, so the top of the list is never stale
+  const key = {snr:  (a,b) => (b.snr - a.snr)             || newestFirst(a,b),
+               time: newestFirst,
+               km:   (a,b) => ((b.km||0) - (a.km||0))     || newestFirst(a,b)}[sortKey];
   return v.slice().sort(key).slice(0,150);
 }
 const CALLRE = /\b([A-Z0-9]{1,3}\d[A-Z0-9]*[A-Z](?:\/[A-Z0-9]+)?)\b/g;
