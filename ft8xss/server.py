@@ -228,6 +228,7 @@ class Station:
         self.txfix = {"state": "unknown"}
         self.bandfix = {}
         self.busy_band = False
+        self.swr_block = {"blocked": False, "swr": None, "at": None}
         self.last_beat = 0.0
         self.ever_beat = False
         self.uploads = {"ok": 0, "failed": 0, "last": None}
@@ -325,7 +326,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
         nb = band_of(s.get("dial"))
         if nb and nb != ST.last_dial:
             if ST.last_dial is not None:
-                asyncio.create_task(band_setup(nb))
+                asyncio.create_task(band_change(nb))
             ST.last_dial = nb
         dxc = (s.get("dx_call") or "").strip().upper()
         if dxc and dxc != (prev.get("dx_call") or "").strip().upper():
@@ -542,11 +543,13 @@ async def ws_handler(req):
         "status": ST.status, "decodes": ST.decodes[-200:],
         "qsos": ST.qsos[-30:], "uploads": ST.uploads, "rig": ST.rig,
         "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
+        "swr_block": ST.swr_block,
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
         "entities": sorted(ST.worked_entities),
         "me": {"call": MY_CALL, "grid": MY_GRID},
-        "caps": {"gui": gui.available(), "gui_reason": gui.reason()},
+        "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
+                 "wsjtx": ST.wsjtx_addr is not None},
     }}))
     try:
         async for m in ws:
@@ -558,13 +561,19 @@ async def ws_handler(req):
                 continue
             act = req_msg.get("action")
             if act == "call":
+                if tx_blocked():
+                    await ws.send_str(json.dumps({"type": "ack", "data": {
+                        "action": "call", "ok": False, "who": tx_block_msg()}}))
+                    continue
                 d = next((x for x in ST.decodes if x["id"] == req_msg.get("id")), None)
                 if d and ST.status.get("tx_enabled") is not True:
                     await set_tx(True)
                 ok = PROTO.send_reply(d) if d else False
+                who = d["sender"] if d else None
+                if not ok and ST.wsjtx_addr is None:
+                    who = "waiting for WSJT-X — it has not sent a packet yet"
                 await ws.send_str(json.dumps({"type": "ack", "data": {
-                    "action": "call", "ok": ok,
-                    "who": d["sender"] if d else None}}))
+                    "action": "call", "ok": ok, "who": who}}))
             elif act == "halt":
                 ok = await full_stop()
                 await ws.send_str(json.dumps({"type": "ack", "data": {
@@ -600,6 +609,10 @@ async def ws_handler(req):
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "tune", "ok": ok, "who": "ATU"}}))
             elif act == "armtx":
+                if tx_blocked():
+                    await ws.send_str(json.dumps({"type": "ack", "data": {
+                        "action": "armtx", "ok": False, "who": tx_block_msg()}}))
+                    continue
                 ok = await arm_tx()
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "armtx", "ok": ok, "who": "Enable Tx"}}))
@@ -620,6 +633,10 @@ async def ws_handler(req):
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "setfreq", "ok": ok, "who": f"{hz/1e6:.3f}"}}))
             elif act == "cq":
+                if tx_blocked():
+                    await ws.send_str(json.dumps({"type": "ack", "data": {
+                        "action": "cq", "ok": False, "who": tx_block_msg()}}))
+                    continue
                 grid = MY_GRID[:4].upper()
                 text = f"CQ {MY_CALL} {grid}"
                 # Call CQ is the explicit opt-in: arm the transmitter for it
@@ -643,9 +660,11 @@ async def api_state(req):
         "qsos": ST.qsos[-30:], "uploads": ST.uploads,
         "wsjtx": str(ST.wsjtx_addr), "worked_count": len(ST.worked),
         "rig": ST.rig, "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
+        "swr_block": ST.swr_block,
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
-        "caps": {"gui": gui.available(), "gui_reason": gui.reason()},
+        "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
+                 "wsjtx": ST.wsjtx_addr is not None},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
     })
 
@@ -699,6 +718,7 @@ async def rig_poll():
                     rig["peak"] = dict(peak)      # keep the last TX peaks
                     # high SWR at the end of a transmission -> run the ATU,
                     # but only while idle and not more often than the cooldown
+                    asyncio.create_task(note_swr(peak["swr"], "transmission"))
                     if (peak["swr"] >= SWR_TRIGGER
                             and peak["po"] > 1.0
                             and time.time() - ST.tune["last"] > TUNE_COOLDOWN):
@@ -789,6 +809,8 @@ def recommend_band(current_band):
 
 SWR_TRIGGER = float(_env("SWR_TRIGGER", "2.0"))
 TUNE_COOLDOWN = float(_env("TUNE_COOLDOWN", "300"))
+# refuse to transmit for measurement above this SWR
+SWR_ABORT = float(_env("SWR_ABORT", "3.0"))
 
 
 async def run_tuner(swr_seen, manual=False):
@@ -956,6 +978,60 @@ async def _cq_once():
     return True
 
 
+def bs_drive():
+    from bandsetup import load_drive
+    return load_drive()
+
+
+async def band_change(band):
+    """Runs on every band change.
+
+    Tunes the antenna and nothing else. The ATU is keyed by the radio itself
+    via hamlib, so this needs neither Enable Tx nor a CQ -- which means a band
+    change can never put the station on the air by itself. Drive calibration
+    transmits, so it stays behind an explicit button.
+    """
+    if ST.busy_band:
+        return
+    ST.busy_band = True
+    try:
+        ST.bandfix = {"band": band, "state": "tuning"}
+        await ST.broadcast("bandfix", ST.bandfix)
+        diag.log(f"[band] {band}: changed -- running ATU")
+        if (await rig_cmd("t")) == "1":
+            diag.log(f"[band] {band}: transmitting, skipping tune")
+            ST.bandfix = {"band": band, "state": "skipped",
+                          "err": "was transmitting"}
+        else:
+            resp = await rig_cmd("G TUNE")
+            ok = resp is not None and "RPRT 0" in resp
+            await asyncio.sleep(7)
+            swr = await rig_cmd("l SWR")
+            try:
+                swr = round(float(swr), 2)
+            except (TypeError, ValueError):
+                swr = None
+            ST.tune["last"] = time.time()
+            ST.tune["count"] += 1
+            if swr is not None:
+                await note_swr(swr, f"tune on {band}")
+            ST.tune["msg"] = f"tuned on {band}"
+            await ST.broadcast("tune", ST.tune)
+            stored = bs_drive().get(band)
+            ST.bandfix = {"band": band, "state": "tuned", "ok": ok, "swr": swr,
+                          "att": stored,
+                          "note": ("drive not calibrated for this band -- "
+                                   "press Setup band when you are ready to transmit")
+                                  if stored is None else None}
+            diag.log(f"[band] {band}: tune ok={ok} swr={swr} stored_att={stored}")
+    except Exception as e:
+        diag.exception(f"[band] {band} tune failed", e)
+        ST.bandfix = {"band": band, "state": "error", "err": str(e)}
+    finally:
+        ST.busy_band = False
+    await ST.broadcast("bandfix", ST.bandfix)
+
+
 async def band_setup(band):
     """Tune if needed, then find the drive that gives full power with clean ALC.
 
@@ -966,6 +1042,15 @@ async def band_setup(band):
         return None
     if not gui.available():
         ST.bandfix = {"band": band, "state": "unavailable", "err": gui.reason()}
+        await ST.broadcast("bandfix", ST.bandfix)
+        return ST.bandfix
+    # never drive a transmitter into a bad match
+    last_swr = ST.swr_block.get("swr") or (ST.rig.get("peak") or {}).get("swr")
+    if last_swr and last_swr >= SWR_ABORT:
+        ST.bandfix = {"band": band, "state": "aborted", "swr": last_swr,
+                      "err": f"SWR {last_swr:.1f} is too high to transmit safely -- "
+                             f"run the tuner or check the antenna first"}
+        diag.error(f"[band] {band}: refusing to transmit, SWR {last_swr}")
         await ST.broadcast("bandfix", ST.bandfix)
         return ST.bandfix
     ST.busy_band = True
@@ -1172,6 +1257,40 @@ async def click_at(dx, dy):
 
 async def arm_tx():
     return await set_tx(True)
+
+
+async def note_swr(swr, where=""):
+    """Record an SWR reading and set or clear the transmit inhibit.
+
+    SWR only reads meaningfully while transmitting, so an unknown value never
+    blocks -- only a measured bad one does.
+    """
+    try:
+        swr = float(swr)
+    except (TypeError, ValueError):
+        return
+    blocked = swr >= SWR_ABORT
+    was = ST.swr_block.get("blocked")
+    ST.swr_block = {"blocked": blocked, "swr": round(swr, 2),
+                    "at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    "limit": SWR_ABORT}
+    if blocked and not was:
+        diag.error(f"[swr] {swr:.1f} at/above limit {SWR_ABORT} ({where}) "
+                   f"-- transmit inhibited")
+        await full_stop()
+    elif was and not blocked:
+        diag.log(f"[swr] {swr:.2f} back within limits ({where}) -- transmit allowed")
+    await ST.broadcast("swr", ST.swr_block)
+
+
+def tx_blocked():
+    return bool(ST.swr_block.get("blocked"))
+
+
+def tx_block_msg():
+    b = ST.swr_block
+    return (f"SWR {b.get('swr')} is at or above the {b.get('limit')} limit. "
+            f"Run the tuner or check the antenna before transmitting.")
 
 
 async def full_stop():

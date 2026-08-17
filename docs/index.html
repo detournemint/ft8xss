@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ft8xss — a browser front end for WSJT-X</title>
+<meta name="description" content="ft8xss puts WSJT-X in your browser. Live decodes, click-to-call, logging, QRZ upload, DXCC tracking and rig telemetry — without replacing your modem.">
+<meta property="og:title" content="ft8xss — a browser front end for WSJT-X">
+<meta property="og:description" content="Live decodes, click-to-call, logging and rig telemetry in the browser. Drives an unmodified WSJT-X over its standard UDP protocol.">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e6e9ee; --dim:#8b95a3;
+    --accent:#4aa3ff; --ok:#2ee06a; --warn:#f0a02c; --bad:#ff5d5d;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+
+  header{border-bottom:1px solid var(--line);background:var(--panel);
+         position:sticky;top:0;z-index:10;backdrop-filter:blur(6px)}
+  header .wrap{display:flex;align-items:center;gap:18px;padding-top:12px;padding-bottom:12px}
+  .brand{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--accent);
+         letter-spacing:.06em}
+  header nav{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
+  header nav a{color:var(--dim);text-decoration:none;font-size:13px}
+  header nav a:hover{color:var(--ink)}
+  .gh{border:1px solid var(--line);border-radius:6px;padding:5px 12px;color:var(--ink) !important}
+
+  .hero{padding:56px 0 12px;text-align:center}
+  .hero h1{font-family:var(--mono);font-size:clamp(28px,5vw,46px);margin:0 0 12px;
+           letter-spacing:-.01em}
+  .hero p.lead{font-size:clamp(16px,2.2vw,20px);color:var(--dim);max-width:660px;
+               margin:0 auto 22px}
+  .hero .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
+  .btn{display:inline-block;padding:9px 18px;border-radius:8px;text-decoration:none;
+       font-weight:600;font-size:14px;border:1px solid var(--line)}
+  .btn.primary{background:#1d3a5c;border-color:#2f6ea8;color:#dcecff}
+  .btn.ghost{color:var(--ink)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--warn);
+       border:1px solid #5a4520;background:#2a2113;border-radius:99px;padding:3px 10px;
+       margin-bottom:18px}
+
+  .shot{margin:26px 0 8px;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+        background:var(--panel)}
+  .shot img{display:block;width:100%;height:auto}
+  .cap{color:var(--dim);font-size:12.5px;text-align:center;margin:8px 0 30px}
+
+  section{padding:34px 0;border-top:1px solid var(--line)}
+  h2{font-family:var(--mono);font-size:20px;margin:0 0 6px;letter-spacing:.02em}
+  h2 .hash{color:var(--dim);font-weight:400}
+  section > .wrap > p{color:var(--dim);max-width:760px}
+  section > .wrap > p strong{color:var(--ink)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+        gap:14px;margin-top:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 17px}
+  .card h3{margin:0 0 6px;font-size:14.5px;font-family:var(--mono);color:var(--ink)}
+  .card p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.55}
+
+  .why{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+       border-radius:8px;padding:16px 20px;margin-top:18px}
+  .why p{margin:0;color:var(--ink)}
+  .why p + p{margin-top:10px;color:var(--dim)}
+
+  .safety{border-left-color:var(--ok)}
+  ul.plain{list-style:none;padding:0;margin:14px 0 0}
+  ul.plain li{padding:7px 0 7px 24px;position:relative;color:var(--dim);font-size:14px;
+              border-bottom:1px solid #1b2129}
+  ul.plain li::before{content:"▸";position:absolute;left:4px;color:var(--accent)}
+  ul.plain li b{color:var(--ink)}
+
+  pre{background:#0b0e12;border:1px solid var(--line);border-radius:8px;padding:13px 15px;
+      overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#cfe0f0;margin:14px 0}
+  code{font-family:var(--mono);font-size:.92em;color:#cfe0f0}
+  p code,li code{background:#0b0e12;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+
+  footer{border-top:1px solid var(--line);padding:28px 0 44px;color:var(--dim);font-size:13px}
+  footer a{color:var(--dim)}
+  .muted{color:var(--dim)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="brand">ft8xss</span>
+    <nav>
+      <a href="#what">What it is</a>
+      <a href="#features">Features</a>
+      <a href="#safety">Safety</a>
+      <a href="#install">Install</a>
+      <a href="#radios">Radios</a>
+      <a href="#credits">Credits</a>
+      <a class="gh" href="https://github.com/detournemint/ft8xss">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap hero">
+  <span class="tag">early alpha · GPL-3.0</span>
+  <h1>WSJT-X, in your browser.</h1>
+  <p class="lead">
+    Live decodes, click-to-call, automatic logging and rig telemetry — from a
+    phone, tablet or laptop anywhere on your network. Without replacing your modem.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/detournemint/ft8xss">View on GitHub</a>
+    <a class="btn ghost" href="#install">Install</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="shot"><img src="images/operate.png" alt="ft8xss operate view: band activity, current QSO, map, propagation and rig telemetry"></div>
+  <p class="cap">The operate view. Screenshots use synthetic data.</p>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2><span class="hash">#</span> What it is</h2>
+    <p>
+      ft8xss is a web front end for <strong>WSJT-X</strong>. It reads the decodes
+      WSJT-X already broadcasts, shows them somewhere useful, and lets you work
+      stations without sitting at the radio.
+    </p>
+    <div class="why">
+      <p><strong>It does not replace your modem.</strong></p>
+      <p>
+        Other web FT8 projects implement their own DSP in the browser or embed
+        WSJT-X's decoder binaries. ft8xss drives an <strong>unmodified WSJT-X</strong>
+        over its standard UDP protocol. You install it beside the WSJT-X you already
+        run and trust — no forked decoder, no replacement DSP, and it keeps working
+        when WSJT-X updates.
+      </p>
+    </div>
+    <div class="cols">
+      <div class="card">
+        <h3>Run it on your desktop</h3>
+        <p>Keep using the WSJT-X window as you always have. ft8xss adds a dashboard
+        you can open beside it, or on your phone from the sofa.</p>
+      </div>
+      <div class="card">
+        <h3>Or run the whole station headless</h3>
+        <p>WSJT-X on a Pi or server with the radio attached, and you operate entirely
+        from a browser. No VNC.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Features</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Band activity</h3>
+        <p>Every decode with SNR, distance, bearing, DXCC entity and band. Filter by
+        CQ, new callsign, new DXCC, or messages addressed to you. Sort by signal,
+        time or distance.</p>
+      </div>
+      <div class="card">
+        <h3>Click to call</h3>
+        <p>Call any decode, or call CQ, from the browser. Sends the same Reply packet
+        WSJT-X uses when you double-click a line.</p>
+      </div>
+      <div class="card">
+        <h3>QSO thread</h3>
+        <p>The exchange as a conversation rather than scattered rows — and a warning
+        when the other station keeps repeating a reply, which means they are not
+        hearing you.</p>
+      </div>
+      <div class="card">
+        <h3>Logging &amp; QRZ upload</h3>
+        <p>QSOs log automatically and upload to your QRZ logbook, with a per-contact
+        status badge so you can see exactly which one failed.</p>
+      </div>
+      <div class="card">
+        <h3>DXCC tracking</h3>
+        <p>Entities resolved from callsign prefixes and checked against your real QRZ
+        logbook, so “new one” means new to <em>you</em>.</p>
+      </div>
+      <div class="card">
+        <h3>Rig telemetry</h3>
+        <p>Live power, ALC, SWR and S-meter through hamlib, including peak readings
+        captured during each transmission.</p>
+      </div>
+      <div class="card">
+        <h3>Automatic band setup</h3>
+        <p>On a band change: run the ATU if SWR is high, then find the drive level
+        that gives full power with clean ALC — measured, not guessed.</p>
+      </div>
+      <div class="card">
+        <h3>Propagation</h3>
+        <p>Solar indices, HF band ratings day and night, VHF and E-skip status, and a
+        recommendation for the best band right now.</p>
+      </div>
+      <div class="card">
+        <h3>Who hears me</h3>
+        <p>Live PSK Reporter reception reports. Stop guessing whether you are getting
+        out — the answer is on the screen.</p>
+      </div>
+      <div class="card">
+        <h3>Azimuthal map</h3>
+        <p>Centred on your QTH, so distance from centre is true distance and angle is
+        true bearing. Where a dot sits is where the antenna points.</p>
+      </div>
+      <div class="card">
+        <h3>Logbook</h3>
+        <p>Full history with entity summary, sortable columns, filters, and a map that
+        follows the filter.</p>
+      </div>
+      <div class="card">
+        <h3>Diagnostics</h3>
+        <p>One click produces a redacted report — versions, device detection, live
+        state, errors and logs — to attach to an issue. API keys never appear.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2><span class="hash">#</span> Logbook</h2>
+    <p>Every contact, plotted by true bearing and distance from your station.</p>
+    <div class="shot"><img src="images/logbook.png" alt="ft8xss logbook view with entity summary, azimuthal map and sortable contact table"></div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Safety</h2>
+    <p>
+      This software keys your transmitter. <strong>You are the control operator.</strong>
+      The design assumes that and behaves accordingly.
+    </p>
+    <div class="why safety">
+      <ul class="plain" style="margin:0">
+        <li><b>Dead-man switch.</b> If the browser driving the station stops
+            responding while the transmitter is armed, transmission stops.</li>
+        <li><b>STOP means stop.</b> It halts the transmission, disables Enable Tx and
+            verifies PTT is down — not a pause that resumes on its own.</li>
+        <li><b>No silent arming.</b> Every transmission traces back to something you
+            pressed. Automatic band setup arms the radio only for its own
+            measurements and returns it exactly as it found it.</li>
+        <li><b>Unattended operation is opt-in</b> and off by default.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Install</h2>
+    <p>Python 3.10+, <code>aiohttp</code>, and a working WSJT-X. <code>hamlib</code>
+       (<code>rigctld</code>) is optional but unlocks rig telemetry, band changes and
+       the tuner.</p>
+<pre>git clone https://github.com/detournemint/ft8xss
+cd ft8xss
+pip install -e .
+
+# tell it who you are
+cp ft8xss.example.env ~/.config/ft8xss.env
+$EDITOR ~/.config/ft8xss.env      # callsign, grid, QRZ key
+
+python3 -m ft8xss.server          # then open http://localhost:8073</pre>
+    <p>In WSJT-X: <strong>Settings → Reporting → UDP Server</strong> <code>127.0.0.1</code>,
+       port <code>2237</code>, and tick <strong>Accept UDP requests</strong> so
+       click-to-call works.</p>
+    <div class="why">
+      <p><strong>Start ft8xss before WSJT-X.</strong></p>
+      <p>WSJT-X binds the UDP port itself if nothing else has it, and ft8xss will then
+         see no decodes at all. This is the single most common setup mistake.</p>
+    </div>
+    <p style="margin-top:16px">Everything else is configurable from the
+       <strong>Settings</strong> tab in the browser.</p>
+    <div class="shot"><img src="images/settings.png" alt="ft8xss settings tab"></div>
+  </div>
+</section>
+
+<section id="radios">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Tested radios</h2>
+    <p>
+      Decodes, click-to-call, logging, DXCC and the map are rig-agnostic — they
+      ride on WSJT-X's UDP protocol. The rig-specific extras (meters, tuner,
+      power, band changes) go through <strong>hamlib</strong>, so support varies
+      by backend.
+    </p>
+    <ul class="plain">
+      <li><b>Yaesu FT-991A</b> — hamlib model 1035. CAT, meters, ATU and power
+          on/off all working. Developed against this radio.
+          <span class="muted">WSJT-X "Fake It" split does not work on this rig via
+          NET rigctl — leave split set to None.</span></li>
+    </ul>
+    <div class="why">
+      <p><strong>Running it on something else? Please tell us.</strong></p>
+      <p>
+        Open an issue with the diagnostics bundle from the Radio panel — it
+        captures your hamlib version, detected model and which meters responded,
+        with API keys redacted. Two minutes of your time saves the next person an
+        evening.
+        <a href="https://github.com/detournemint/ft8xss/issues/new?template=radio-report.md">Report your radio →</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="credits">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Credits</h2>
+    <p>Built on other people's work:</p>
+    <ul class="plain">
+      <li><b><a href="https://wsjt.sourceforge.io/">WSJT-X</a></b> — K1JT and
+          contributors. The modem and the UDP protocol this depends on entirely.</li>
+      <li><b><a href="https://hamlib.github.io/">hamlib</a></b> — CAT control.</li>
+      <li><b><a href="https://pskreporter.info/">PSK Reporter</a></b> — reception
+          reports.</li>
+      <li><b><a href="https://www.hamqsl.com/solar.html">hamqsl.com</a></b> (N0NBH) —
+          solar and band condition data.</li>
+      <li><b><a href="https://www.qrz.com/">QRZ.com</a></b> — logbook API and profile
+          data.</li>
+    </ul>
+    <p style="margin-top:18px">Ideas borrowed, with thanks:</p>
+    <ul class="plain">
+      <li><b><a href="https://github.com/w5eez/ft8web">w5eez/ft8web</a></b> — the
+          browser dead-man switch.</li>
+      <li><b><a href="https://github.com/ok1cdj/FT8web">ok1cdj/FT8web</a></b> —
+          band/mode-filtered new-worked indicators, and fake-split transmit (tried
+          here, reverted: see the TODO for why).</li>
+    </ul>
+    <p class="muted" style="margin-top:16px;font-size:13px">
+      Neither project shares code with this one — the debt is conceptual.
+      ft8xss is not affiliated with or endorsed by the WSJT-X authors.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    ft8xss · GPL-3.0 ·
+    <a href="https://github.com/detournemint/ft8xss">github.com/detournemint/ft8xss</a>
+    · <a href="https://github.com/detournemint/ft8xss/issues">report an issue</a>
+    <br>
+    <span class="muted">Early alpha. It keys a transmitter — read the safety notes.</span>
+  </div>
+</footer>
+
+</body>
+</html>

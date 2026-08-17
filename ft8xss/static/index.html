@@ -110,6 +110,8 @@
   .bandcond span{font-size:11px;padding:1px 0}
   .c-good{color:#2ee06a} .c-fair{color:#f0a02c} .c-poor{color:#ff7070}
   .newdx{color:#ff7de9;font-weight:700}
+  .rigacts{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #1a1f27}
+  .rigacts button{flex:1}
   .advice{padding:6px 12px;font-size:11px}
   .advice.good{color:var(--ok)} .advice.warn{color:#f0a02c} .advice.bad{color:var(--warn)}
   #map{display:block;background:#0b1016;cursor:crosshair}
@@ -218,6 +220,7 @@
   <div class="pill"><span>radio</span>
     <b id="pwr-state">—</b>
     <button id="pwr-btn" class="pwrbtn">off</button></div>
+  <div class="pill"><span>wsjt-x</span> <b id="wlink">—</b></div>
   <div class="pill"><span>link</span> <b id="link">connecting…</b></div>
   <div class="clock">
     <div><b id="clk-utc">--:--:--</b> <span>UTC</span></div>
@@ -230,6 +233,11 @@
   <span id="rec-text"></span>
   <button id="rec-go" class="recbtn">QSY</button>
   <button id="rec-hide" class="recx">×</button>
+</div>
+
+<div id="swrbar" class="warnbar crit" style="display:none">
+  <span class="wtext" id="swr-text"></span>
+  <button id="swr-tune" class="warnbtn">Run tuner</button>
 </div>
 
 <div id="warnbar" class="warnbar">
@@ -280,6 +288,24 @@
   <div class="gutter" id="gutter"></div>
   <aside>
     <section class="panel">
+      <h2>Radio</h2>
+      <div class="kv"><span>PO (peak)</span><b id="r-po">—</b></div>
+      <div class="kv"><span>ALC (peak)</span><b id="r-alc">—</b></div>
+      <div class="kv"><span>SWR</span><b id="r-swr">—</b></div>
+      <div class="kv"><span>RF power set</span><b id="r-pwr">—</b></div>
+      <div class="kv"><span>S-meter</span><b id="r-s">—</b></div>
+      <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
+      <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
+      <div class="rigacts"><button id="tunebtn" class="go">Run tuner</button><button id="bandbtn">Setup band</button></div>
+      <div style="padding:6px 12px">
+        <a id="diagbtn" href="/api/diagnostics" download
+           style="font-size:11px;color:var(--dim);border-bottom:1px dotted #4a5666;
+                  text-decoration:none">download diagnostics</a>
+      </div>
+      <div id="gui-note" class="advice warn" style="display:none"></div>
+      <div id="r-advice" class="advice"></div>
+    </section>
+    <section class="panel">
       <h2>Current QSO <span id="qso-with" class="muted"></span></h2>
       <div id="card" class="card"></div>
       <div id="thread" class="thread"><div class="muted" style="padding:10px 12px">
@@ -309,24 +335,6 @@
       <div class="kv"><span>MUF</span><b id="b-muf">—</b></div>
       <div id="b-cond" class="bandcond"></div>
       <div id="b-vhf" class="vhflist"></div>
-    </section>
-    <section class="panel">
-      <h2>Radio</h2>
-      <div class="kv"><span>PO (peak)</span><b id="r-po">—</b></div>
-      <div class="kv"><span>ALC (peak)</span><b id="r-alc">—</b></div>
-      <div class="kv"><span>SWR</span><b id="r-swr">—</b></div>
-      <div class="kv"><span>RF power set</span><b id="r-pwr">—</b></div>
-      <div class="kv"><span>S-meter</span><b id="r-s">—</b></div>
-      <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
-      <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
-      <div style="padding:6px 12px;display:flex;gap:6px"><button id="tunebtn">Run tuner</button><button id="bandbtn">Setup band</button></div>
-      <div style="padding:6px 12px">
-        <a id="diagbtn" href="/api/diagnostics" download
-           style="font-size:11px;color:var(--dim);border-bottom:1px dotted #4a5666;
-                  text-decoration:none">download diagnostics</a>
-      </div>
-      <div id="gui-note" class="advice warn" style="display:none"></div>
-      <div id="r-advice" class="advice"></div>
     </section>
     <section class="panel">
       <h2>Uploads</h2>
@@ -421,6 +429,7 @@ function connect(){
       document.title = data.me.call ? `ft8xss — ${data.me.call}` : "ft8xss";
       setUploads(data.uploads); setRig(data.rig); setPsk(data.psk);
       setBands(data.bands); setTune(data.tune); setBandfix(data.bandfix);
+      setSwr(data.swr_block);
       applyCaps(data.caps);
       workedEntities = data.entities || workedEntities;
       if (data.last_decode_age != null) lastDecodeAt = Date.now() - data.last_decode_age*1000;
@@ -438,10 +447,11 @@ function connect(){
     else if (type === "psk"){ setPsk(data); }
     else if (type === "bands"){ setBands(data); }
     else if (type === "tune"){ setTune(data); }
+    else if (type === "swr"){ setSwr(data); }
     else if (type === "bandfix"){ setBandfix(data); }
     else if (type === "card"){ setCard(data); }
     else if (type === "ack"){
-      if (data.action === "call") toast(data.ok ? `calling ${data.who}` : "call failed — no WSJT-X link", !data.ok);
+      if (data.action === "call") toast(data.ok ? `calling ${data.who}` : (data.who || "call failed"), !data.ok);
       if (data.action === "halt") toast(data.ok ? "STOPPED — TX disabled until you Call CQ" : "halt incomplete — check the radio", !data.ok);
       if (data.action === "cq") toast(data.ok ? `calling ${data.who}` : "CQ failed — no WSJT-X link", !data.ok);
       if (data.action === "power") toast(data.ok ? data.who : "power command failed", !data.ok);
@@ -460,6 +470,17 @@ let caps = {gui:false, gui_reason:""};
 function applyCaps(c){
   if (!c) return;
   caps = c;
+  const w = $("#wlink");
+  if (w){
+    w.textContent = caps.wsjtx ? "linked" : "waiting…";
+    w.style.color = caps.wsjtx ? "var(--ok)" : "var(--warn)";
+  }
+  // transmit controls need WSJT-X to have introduced itself first
+  ["#cq"].forEach(sel => {
+    const el = $(sel); if (!el) return;
+    if (!caps.wsjtx){ el.disabled = true; el.title = "waiting for WSJT-X"; }
+    else if (el.title === "waiting for WSJT-X"){ el.disabled = false; el.title = ""; }
+  });
   const needGui = ["#armtx", "#bandbtn"];
   needGui.forEach(sel => {
     const el = $(sel); if (!el) return;
@@ -688,6 +709,26 @@ function updateTxBar(){
   $("#txbar-meta").textContent = bits.join("  \u00b7  ");
 }
 
+let swrBlock = {blocked:false};
+function setSwr(b){
+  if (!b) return;
+  swrBlock = b;
+  const bar = $("#swrbar");
+  if (b.blocked){
+    $("#swr-text").textContent =
+      `HIGH SWR ${b.swr} — transmit is blocked (limit ${b.limit}). `
+      + `Run the tuner or check the antenna.`;
+    bar.style.display = "flex";
+  } else { bar.style.display = "none"; }
+  ["#cq","#armtx","#bandbtn"].forEach(sel => {
+    const el = $(sel); if (!el) return;
+    if (b.blocked){ el.disabled = true; el.title = "blocked: high SWR"; }
+    else if (el.title === "blocked: high SWR"){ el.disabled = false; el.title = ""; }
+  });
+  measureChrome();
+}
+$("#swr-tune").onclick = () => ws.send(JSON.stringify({action:"tune"}));
+
 function setTune(t){
   if (!t) return;
   const el = $("#r-tune");
@@ -762,7 +803,8 @@ document.addEventListener("click", e => {
 function measureChrome(){
   const head = document.querySelector("header");
   const tabs = document.querySelector(".tabs");
-  const bars = [...document.querySelectorAll(".recbar.on,.warnbar.on,.txbar.on")];
+  const bars = [...document.querySelectorAll(".recbar.on,.warnbar.on,.txbar.on")]
+                 .concat($("#swrbar").style.display === "flex" ? [$("#swrbar")] : []);
   let h = (head?.offsetHeight||0) + (tabs?.offsetHeight||0) + 46;
   bars.forEach(b => h += b.offsetHeight);
   document.documentElement.style.setProperty("--chrome", h + "px");

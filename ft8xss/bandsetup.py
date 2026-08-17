@@ -16,6 +16,7 @@ DRIVE_FILE = Path.home() / ".config/ft8web-drive.json"
 ALC_MAX = 0.30           # above this we are compressing
 ALC_IDEAL = 0.20
 SWR_TRIGGER = 2.0
+SWR_ABORT = 3.0          # stop measuring entirely above this
 PO_FLOOR = 0.80          # accept >= 80% of the rig's set power
 ATT_MIN, ATT_MAX = 30, 250
 MAX_STEPS = 4
@@ -121,6 +122,11 @@ class BandSetup:
                 if not m:
                     self.log(f"[band] {band}: no transmission detected, aborting")
                     return None
+
+                if m["swr"] >= SWR_ABORT:
+                    self.log(f"[band] {band}: SWR {m['swr']:.1f} too high -- "
+                             f"aborting before further transmission")
+                    return {"band": band, "aborted": True, **m}
 
                 # 1. antenna first -- a bad match makes the drive numbers lie
                 if m["swr"] >= SWR_TRIGGER:

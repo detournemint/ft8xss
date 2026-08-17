@@ -66,6 +66,51 @@ live station state, recent errors and the log — with API keys redacted.
   Automatic band setup arms the radio only for its own measurements and returns
   it to the state it found.
 
+## Tested radios
+
+Most of ft8xss is rig-agnostic: decodes, click-to-call, logging, upload, DXCC,
+PSK Reporter and the map all ride on WSJT-X's UDP protocol and work with
+whatever WSJT-X already controls.
+
+The rig-specific parts — meters, the tuner, power on/off, band changes — go
+through **hamlib**, so they depend on how well your radio's hamlib backend
+supports them. That is what the table below tracks.
+
+| Radio | hamlib model | CAT | Meters (PO/ALC/SWR) | ATU (`G TUNE`) | Power on/off | Notes |
+|---|---|---|---|---|---|---|
+| Yaesu FT-991A | 1035 (FT-991) | ✅ | ✅ | ✅ | ✅ | Developed against this. See note below. |
+
+**Nothing else has been tested.** If your radio is not listed, the core will very
+likely work and the rig-specific extras may or may not — hamlib backends vary a
+lot in what they implement.
+
+### FT-991A note
+
+WSJT-X's **"Fake It" split** (`SplitMode=split_mode_emulate`) does *not* work on
+this rig through Hamlib NET rigctl: it shifts the VFO without compensating the
+audio offset, putting every transmission about 2 kHz off frequency, with no
+error reported anywhere. Leave split set to **None** unless you have verified
+against PSK Reporter that you are still being heard.
+
+### Tell us about your radio
+
+If you run ft8xss on something not in the table, please
+[open an issue](https://github.com/detournemint/ft8xss/issues/new?template=radio-report.md)
+and say what worked. Two minutes of your time saves the next person an evening.
+
+Include the **diagnostics bundle** — the *download diagnostics* link in the Radio
+panel. It captures your hamlib version, the detected model, which meters
+responded, and your audio and serial devices, with API keys redacted. That is
+almost everything needed to fill in a row.
+
+Useful to know, roughly in order:
+
+- Does CAT work at all — frequency and mode readable, band changes applied?
+- Do the meters report during a transmission (`PO`, `ALC`, `SWR`)?
+- Does **Run tuner** actually cycle your ATU?
+- Does the radio power on and off from the browser?
+- Anything that behaved oddly, however small.
+
 ## Installation
 
 ft8xss runs in two arrangements. Both use the same code.
