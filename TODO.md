@@ -7,7 +7,7 @@ Ideas credited to the projects they came from — see README for links.
 - [ ] **Core / headless split.** Extract a core that needs only UDP + rigctld
       (works with WSJT-X on any machine, including the operator's desktop) from
       the optional headless helper that drives the GUI with xdotool.
-- [ ] **Drop WSJT-Z coupling.** Window title, unit name and the Auto CQ /
+- [x] **Drop WSJT-Z coupling.** Window title, unit name and the Auto CQ /
       Auto Call buttons are the only Z-specific pieces. Removing the auto
       buttons *is* the port — that automation does not exist in WSJT-X and is
       the part the community objects to.
@@ -17,9 +17,8 @@ Ideas credited to the projects they came from — see README for links.
       read USB VID/PID, map to a hamlib model, verify by starting rigctld and
       reading the frequency back. Pick the audio codec on the same USB device.
 - [ ] **Config file** instead of environment variables only.
-- [ ] Choose a licence (GPL-3.0 matches the WSJT-X ecosystem; MIT is more
-      permissive). Decide before the first push.
-- [ ] Remove hardcoded K6XSS/CM88VC defaults.
+- [x] Licence: GPL-3.0, matching the WSJT-X ecosystem.
+- [x] Remove hardcoded callsign/grid defaults; env prefix is now FT8XSS_.
 - [ ] Install docs for both **local** (WSJT-X and ft8xss on one desktop) and
       **server** (headless station, browser elsewhere) layouts.
 

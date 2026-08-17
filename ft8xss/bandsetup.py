@@ -48,18 +48,18 @@ class BandSetup:
     stays testable and does not import the server."""
 
     def __init__(self, *, rig_cmd, set_tx, send_cq, get_status, log,
-                 restart_wsjtz, target_watts):
+                 restart_wsjtx, target_watts):
         self.rig_cmd = rig_cmd
         self.set_tx = set_tx
         self.send_cq = send_cq
         self.get_status = get_status
         self.log = log
-        self.restart_wsjtz = restart_wsjtz
+        self.restart_wsjtx = restart_wsjtx
         self.target_watts = target_watts
 
     async def _set_att(self, val):
         val = max(ATT_MIN, min(ATT_MAX, int(val)))
-        await self.restart_wsjtz(val)
+        await self.restart_wsjtx(val)
         return val
 
     async def _measure(self, timeout=60):

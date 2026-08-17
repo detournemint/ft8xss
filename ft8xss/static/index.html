@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>K6XSS FT8</title>
+<title>ft8xss</title>
 <style>
   :root{
     --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e6e9ee; --dim:#8b95a3;
@@ -767,7 +767,7 @@ function renderLog(){
 }
 function drawLogMap(){
   if (!logData) return;
-  const home = gridLL($("#grid").textContent || "CM88VC"); if (!home) return;
+  const home = gridLL($("#grid").textContent); if (!home) return;
   if (!logMap) logMap = new AzMap($("#logmap"), home[0], home[1]);
   const pts = logFiltered().filter(r => r.grid).map(r => ({
     ll: gridLL(r.grid), grid: r.grid + r.call, snr: -5,
@@ -971,7 +971,7 @@ function gridLL(g){
 let azmap = null;
 function ensureMap(){
   if (azmap) return azmap;
-  const home = gridLL($("#grid").textContent || "CM88VC");
+  const home = gridLL($("#grid").textContent);
   if (!home) return null;
   azmap = new AzMap($("#map"), home[0], home[1]);
   azmap.onpick = s => { if (s.id != null) ws.send(JSON.stringify({action:"call", id:s.id})); };

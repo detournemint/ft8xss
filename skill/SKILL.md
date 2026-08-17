@@ -60,7 +60,7 @@ curl -s "https://retrieve.pskreporter.info/query?senderCallsign=CALL&flowStartSe
 Use a browser User-Agent; PSK Reporter rejects default curl.
 
 **PSK Reporter only spots messages containing a grid square.** A CQ carries one;
-a signal report (`W1ABC K6XSS -07`) does not. So "my CQs are spotted but my
+a signal report (`W1ABC N0CALL -07`) does not. So "my CQs are spotted but my
 reports are not" is expected and proves nothing about your transmitter.
 
 ### 3. Stations answer but the QSO never completes

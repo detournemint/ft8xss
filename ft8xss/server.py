@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ft8web - browser front end for a headless WSJT-X / WSJT-Z station.
+"""ft8web - browser front end for a headless WSJT-X / WSJT-X station.
 
 Binds the WSJT-X UDP port, decodes the Qt DataStream protocol, and serves a
 live web UI over WebSocket. Supports click-to-call (Reply packets) and
@@ -22,23 +22,33 @@ import dxcc
 from bandsetup import BandSetup, load_drive as bs_load_drive
 
 MAGIC = 0xADBCCBDA
-UDP_PORT = int(os.environ.get("FT8WEB_UDP_PORT", "2237"))
-HTTP_PORT = int(os.environ.get("FT8WEB_HTTP_PORT", "8073"))
-MY_GRID = os.environ.get("FT8WEB_GRID", "CM88VC")
-MY_CALL = os.environ.get("FT8WEB_CALL", "K6XSS")
-QRZ_KEY = os.environ.get("FT8WEB_QRZ_KEY", "").strip()
-LOG_ADIF = Path(os.environ.get("FT8WEB_ADIF", str(Path.home() / "ft8web-uploads.adif")))
+def _env(name, default=""):
+    """Read FT8XSS_<NAME>, falling back to the older FT8WEB_ prefix."""
+    return os.environ.get(f"FT8XSS_{name}",
+                          os.environ.get(f"FT8WEB_{name}", default))
+
+
+UDP_PORT = int(_env("UDP_PORT", "2237"))
+HTTP_PORT = int(_env("HTTP_PORT", "8073"))
+BIND_ADDR = _env("BIND", "0.0.0.0")
+MY_GRID = _env("GRID").strip().upper()
+MY_CALL = _env("CALL").strip().upper()
+QRZ_KEY = _env("QRZ_KEY").strip()
+LOG_ADIF = Path(_env("ADIF", str(Path.home() / "ft8xss-uploads.adif")))
+# Which WSJT-X window and service to drive when the headless helper is used.
+WSJTX_WINDOW = _env("WSJTX_WINDOW", "WSJT-X")
+WSJTX_UNIT = _env("WSJTX_UNIT", "wsjtx.service")
 WORKED_FILES = [
     Path.home() / ".local/share/WSJT-X/wsjtx_log.adi",
 ]
 STATIC = Path(__file__).parent / "static"
-XDOTOOL_DISPLAY = os.environ.get("FT8WEB_DISPLAY", ":99")
+XDOTOOL_DISPLAY = _env("DISPLAY_NUM", ":99")
 # Auto-arming Enable Tx means the station calls CQ unattended whenever
 # Tx6 is selected. Off by default -- the operator opts in.
-AUTO_ARM = os.environ.get("FT8WEB_AUTO_ARM", "0") == "1"
+AUTO_ARM = _env("AUTO_ARM", "0") == "1"
 # If a browser has been driving the station and then stops responding, stop
 # transmitting. Idea from w5eez/ft8web. 0 disables.
-DEADMAN_SECS = float(os.environ.get("FT8WEB_DEADMAN", "12"))
+DEADMAN_SECS = float(_env("DEADMAN", "12"))
 MAX_DECODES = 400
 
 # ---------------------------------------------------------------- Qt decoding
@@ -319,14 +329,14 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
         txm = (s.get("tx_message") or "").strip()
         started = bool(s.get("transmitting")) and not bool(prev.get("transmitting"))
         changed = bool(txm) and txm != (ST.last_tx_msg or "")
-        # guard against status bursts: WSJT-Z can emit several status packets
+        # guard against status bursts: WSJT-X can emit several status packets
         # for one transmission, and an identical message inside one T/R period
         # is the same transmission, not a new one.
         now = time.time()
         recent = (txm == (ST.last_tx_msg or "")
                   and now - getattr(ST, "last_tx_at", 0) < 12.0)
         if txm and (started or changed) and not recent:
-            if os.environ.get("FT8WEB_DEBUG_TX"):
+            if _env("DEBUG_TX"):
                 print(f"[tx] add started={started} changed={changed} "
                       f"prev_tx={prev.get('transmitting')} msg={txm!r}", flush=True)
             ST.last_tx_msg = txm
@@ -420,7 +430,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
             pass
         asyncio.create_task(ST.broadcast("qso", rec))
         asyncio.create_task(upload_qrz(adif, call, rec))
-        # WSJT-Z drops Enable Tx when a QSO closes; put it back
+        # WSJT-X drops Enable Tx when a QSO closes; put it back
         asyncio.create_task(_rearm_after_qso())
 
     # --- outbound --------------------------------------------------------
@@ -449,7 +459,7 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
 
     def send_free_text(self, text, send=True):
         """Type 9. With send=True WSJT-X transmits it in the next slot.
-        'CQ K6XSS CM88' encodes as a standard message, not literal free text."""
+        'CQ N0CALL AA00' encodes as a standard message, not literal free text."""
         if not ST.wsjtx_addr:
             return False
         p = struct.pack(">III", MAGIC, 2, 9) + qstring(ST.wsjtx_id)
@@ -586,7 +596,7 @@ async def ws_handler(req):
                     hz = 0
                 ok = False
                 if 1_000_000 <= hz <= 500_000_000:
-                    # drive the rig; WSJT-Z follows the dial on its next poll
+                    # drive the rig; WSJT-X follows the dial on its next poll
                     resp = await rig_cmd(f"F {hz}")
                     ok = resp is not None and "RPRT 0" in resp
                     if ok:
@@ -758,8 +768,8 @@ def recommend_band(current_band):
                     + (f" — better than {current_band}" if current_band else ""))}
 
 
-SWR_TRIGGER = float(os.environ.get("FT8WEB_SWR_TRIGGER", "2.0"))
-TUNE_COOLDOWN = float(os.environ.get("FT8WEB_TUNE_COOLDOWN", "300"))
+SWR_TRIGGER = float(_env("SWR_TRIGGER", "2.0"))
+TUNE_COOLDOWN = float(_env("TUNE_COOLDOWN", "300"))
 
 
 async def run_tuner(swr_seen, manual=False):
@@ -913,11 +923,11 @@ def set_split_mode(mode="fake"):
     return True
 
 
-async def restart_wsjtz_with(att):
-    """Set the Pwr attenuation and restart WSJT-Z so it takes effect."""
+async def restart_wsjtx_with(att):
+    """Set the Pwr attenuation and restart WSJT-X so it takes effect."""
     ini = Path.home() / ".config/WSJT-X.ini"
     pr = await asyncio.create_subprocess_exec(
-        "systemctl", "--user", "stop", "wsjtz.service",
+        "systemctl", "--user", "stop", WSJTX_UNIT,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     await pr.wait()
     await asyncio.sleep(1.5)
@@ -928,7 +938,7 @@ async def restart_wsjtz_with(att):
     except OSError:
         pass
     pr = await asyncio.create_subprocess_exec(
-        "systemctl", "--user", "start", "wsjtz.service",
+        "systemctl", "--user", "start", WSJTX_UNIT,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     await pr.wait()
     # wait for it to come back AND start reporting status packets again
@@ -938,13 +948,13 @@ async def restart_wsjtz_with(att):
         if ST.status.get("dial") and ST.status.get("tx_enabled") is not None:
             break
     await asyncio.sleep(3)
-    print(f"[band] wsjtz back: dial={ST.status.get('dial')} "
+    print(f"[band] wsjtx back: dial={ST.status.get('dial')} "
           f"tx_enabled={ST.status.get('tx_enabled')}", flush=True)
 
 
 async def _cq_once():
     """Arm (verifying) then transmit one CQ. Enable Tx never survives a
-    WSJT-Z restart, so this must confirm rather than assume."""
+    WSJT-X restart, so this must confirm rather than assume."""
     for attempt in range(3):
         if ST.status.get("tx_enabled") is True:
             break
@@ -975,7 +985,7 @@ async def band_setup(band):
             rig_cmd=rig_cmd, set_tx=set_tx, send_cq=_cq_once,
             get_status=lambda: ST.status,
             log=lambda m: print(m, flush=True),
-            restart_wsjtz=restart_wsjtz_with, target_watts=target)
+            restart_wsjtx=restart_wsjtx_with, target_watts=target)
         res = await bs.run(band)
         ST.bandfix = {"band": band, "state": "done", **(res or {"ok": False})}
     except Exception as e:
@@ -1044,7 +1054,7 @@ async def deadman():
 
 
 async def tx_watchdog():
-    """Enable Tx is not persisted by WSJT-Z and gets dropped after QSOs and
+    """Enable Tx is not persisted by WSJT-X and gets dropped after QSOs and
     restarts. Rather than just warn, put it back -- and only surface a warning
     if re-arming actually fails."""
     disabled_since = None
@@ -1162,13 +1172,13 @@ async def xdo(*args):
 
 
 async def client_origin():
-    """Absolute screen position of WSJT-Z's client area.
+    """Absolute screen position of WSJT-X's client area.
 
     xdotool reports the *frame* origin; with a window manager running that is
     offset by the title bar, so clicks land ~20px high. xwininfo's
     'Absolute upper-left' is the client area and is what we need.
     """
-    wid = (await xdo("search", "--name", "WSJT-Z MOD")).splitlines()
+    wid = (await xdo("search", "--name", WSJTX_WINDOW)).splitlines()
     if not wid:
         return None
     pr = await asyncio.create_subprocess_exec(
@@ -1185,7 +1195,7 @@ async def client_origin():
 
 
 async def click_at(dx, dy):
-    """Click at an offset inside WSJT-Z's client area."""
+    """Click at an offset inside WSJT-X's client area."""
     origin = await client_origin()
     if not origin:
         return False
@@ -1202,13 +1212,13 @@ async def set_tx(want, tries=3):
         cur = ST.status.get("tx_enabled")
         if cur is want:
             return True
-        wid = (await xdo("search", "--name", "WSJT-Z MOD")).splitlines()
+        wid = (await xdo("search", "--name", WSJTX_WINDOW)).splitlines()
         if not wid:
             return False
         await xdo("windowfocus", "--sync", wid[0])
         await asyncio.sleep(0.3)
         await xdo("key", "--clearmodifiers", "alt+n")
-        # wait for WSJT-Z to report the new state
+        # wait for WSJT-X to report the new state
         for _ in range(12):
             await asyncio.sleep(0.25)
             if ST.status.get("tx_enabled") is want:
@@ -1233,7 +1243,7 @@ async def full_stop():
 
 
 async def arm_tx():
-    """Enable Tx via the GUI -- WSJT-Z never persists this checkbox, so it is
+    """Enable Tx via the GUI -- WSJT-X never persists this checkbox, so it is
     off after every restart and there is no UDP message for it."""
     env = {**os.environ, "DISPLAY": XDOTOOL_DISPLAY}
 
@@ -1244,7 +1254,7 @@ async def arm_tx():
         out, _ = await pr.communicate()
         return out.decode(errors="replace").strip()
 
-    wid = (await run("xdotool", "search", "--name", "WSJT-Z MOD")).splitlines()
+    wid = (await run("xdotool", "search", "--name", "WSJT-X MOD")).splitlines()
     if not wid:
         return False
     await run("xdotool", "windowfocus", "--sync", wid[0])
@@ -1339,8 +1349,11 @@ async def main():
     app.router.add_static("/static/", STATIC)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", HTTP_PORT).start()
-    print(f"[http] http://0.0.0.0:{HTTP_PORT}  (worked calls loaded: {len(ST.worked)})",
+    await web.TCPSite(runner, BIND_ADDR, HTTP_PORT).start()
+    if not MY_CALL or not MY_GRID:
+        print("[config] FT8XSS_CALL and FT8XSS_GRID are required "
+              "(set them in ~/.config/ft8xss.env)", flush=True)
+    print(f"[http] http://{BIND_ADDR}:{HTTP_PORT}  (worked calls loaded: {len(ST.worked)})",
           flush=True)
     await asyncio.Event().wait()
 

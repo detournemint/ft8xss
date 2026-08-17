@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Auto-accept WSJT-Z's 'Log QSO' dialog on a headless display.
+"""Auto-accept WSJT-X's 'Log QSO' dialog on a headless display.
 
-WSJT-Z only auto-accepts that dialog when Auto CQ or Auto Call is ticked, and
+WSJT-X only auto-accepts that dialog when Auto CQ or Auto Call is ticked, and
 neither checkbox is persisted to the config -- so on a headless station the
 dialog can sit forever, silently swallowing the QSO and stalling auto-sequence.
 This watches for it and presses OK.
@@ -13,7 +13,7 @@ import sys
 import time
 
 DISPLAY = os.environ.get("DISPLAY", ":99")
-POLL = float(os.environ.get("LOGWATCH_POLL", "2.0"))
+POLL = float(os.environ.get("FT8XSS_LOGWATCH_POLL", "2.0"))
 ENV = {**os.environ, "DISPLAY": DISPLAY}
 
 
