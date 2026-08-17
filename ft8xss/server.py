@@ -52,7 +52,6 @@ WSJTX_UNIT = _env("WSJTX_UNIT", "wsjtx.service")
 WORKED_FILES = [Path(_env("LOG", str(Path.home() /
                                      ".local/share/WSJT-X/wsjtx_log.adi")))]
 STATIC = Path(__file__).parent / "static"
-XDOTOOL_DISPLAY = _env("DISPLAY_NUM", ":99")
 # Auto-arming Enable Tx means the station calls CQ unattended whenever
 # Tx6 is selected. Off by default -- the operator opts in.
 AUTO_ARM = _env("AUTO_ARM", "0") == "1"
@@ -582,7 +581,7 @@ async def ws_handler(req):
         "entities": sorted(ST.worked_entities),
         "me": {"call": MY_CALL, "grid": MY_GRID},
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
-                 "wsjtx": ST.wsjtx_addr is not None},
+                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM},
     }}))
     try:
         async for m in ws:
@@ -755,7 +754,7 @@ async def api_state(req):
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
-                 "wsjtx": ST.wsjtx_addr is not None},
+                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
     })
 
@@ -1361,6 +1360,12 @@ async def click_at(dx, dy):
 
 
 async def arm_tx():
+    """Enable Tx. WSJT-X never persists this checkbox, so it is off after every
+    restart, and there is no UDP message for it -- it has to be the GUI.
+
+    Goes through gui.set_tx so it resolves the real main window (the title also
+    matches the Wide Graph and a 1x1 helper), and so it confirms the state
+    afterwards rather than firing a blind toggle at whatever has focus."""
     return await set_tx(True)
 
 
@@ -1724,27 +1729,6 @@ async def full_stop():
     # without GUI automation, halting the transmission is still a success
     return True if not gui.available() else off
 
-
-async def arm_tx():
-    """Enable Tx via the GUI -- WSJT-X never persists this checkbox, so it is
-    off after every restart and there is no UDP message for it."""
-    env = {**os.environ, "DISPLAY": XDOTOOL_DISPLAY}
-
-    async def run(*args):
-        pr = await asyncio.create_subprocess_exec(
-            *args, env=env, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await pr.communicate()
-        return out.decode(errors="replace").strip()
-
-    wid = (await run("xdotool", "search", "--name", "WSJT-X MOD")).splitlines()
-    if not wid:
-        return False
-    await run("xdotool", "windowfocus", "--sync", wid[0])
-    await asyncio.sleep(0.4)
-    await run("xdotool", "key", "--clearmodifiers", "alt+n")
-    await asyncio.sleep(1.5)
-    return True
 
 
 ADIF_FIELD = re.compile(r"<([A-Za-z_0-9]+):(\d+)(?::[A-Za-z])?>")

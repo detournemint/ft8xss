@@ -60,6 +60,12 @@ Everything configurable from the browser. Values are written to an env file
 (mode 600, since it holds your API key) and fields that need a service restart
 are marked.
 
+### What the messages mean
+
+Every warning and refusal ft8xss can show you is documented, with what causes it
+and what to do: **[message reference](https://detournemint.github.io/ft8xss/errors/)**. The **?** beside a message in the
+interface links straight to its entry.
+
 ### Diagnostics
 
 If something is not working, **download diagnostics** from the Radio panel and

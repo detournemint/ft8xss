@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ft8xss — what the messages mean</title>
+<meta name="description" content="Every warning and refusal ft8xss can show you, what causes it, and what to do about it.">
+<meta property="og:title" content="ft8xss — what the messages mean">
+<meta property="og:description" content="Every warning and refusal ft8xss can show you, what causes it, and what to do about it.">
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e6e9ee; --dim:#8b95a3;
+    --accent:#4aa3ff; --ok:#2ee06a; --warn:#f0a02c; --bad:#ff5d5d;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+  header{border-bottom:1px solid var(--line);background:var(--panel);
+         position:sticky;top:0;z-index:10}
+  header .wrap{display:flex;align-items:center;gap:18px;padding:12px 20px}
+  .brand{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--accent);
+         letter-spacing:.06em;text-decoration:none}
+  header nav{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
+  header nav a{color:var(--dim);text-decoration:none;font-size:13px}
+  header nav a:hover{color:var(--ink)}
+
+  h1{font-family:var(--mono);font-size:clamp(24px,4vw,36px);margin:36px 0 10px}
+  .lead{color:var(--dim);max-width:720px;margin:0 0 26px}
+  h2{font-size:13px;font-family:var(--mono);text-transform:uppercase;
+     letter-spacing:.1em;color:var(--dim);margin:38px 0 12px;
+     border-bottom:1px solid var(--line);padding-bottom:8px}
+
+  .toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+       gap:6px 20px;margin:0 0 8px;padding:0;list-style:none}
+  .toc a{text-decoration:none;font-size:13.5px}
+  .toc a:hover{text-decoration:underline}
+
+  .msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+       padding:18px 20px;margin:0 0 14px;scroll-margin-top:70px}
+  .msg:target{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .msg .quote{font-family:var(--mono);font-size:13.5px;color:var(--ink);
+              background:#11151a;border-left:3px solid var(--line);
+              border-radius:0 6px 6px 0;padding:9px 13px;margin:0 0 12px;
+              overflow-x:auto;white-space:pre-wrap}
+  .msg.sev-info .quote{border-left-color:var(--accent)}
+  .msg.sev-warn .quote{border-left-color:var(--warn)}
+  .msg.sev-stop .quote{border-left-color:var(--bad)}
+  .msg h3{margin:0 0 6px;font-size:16px}
+  .msg p{margin:0 0 10px}
+  .msg p:last-child{margin-bottom:0}
+  .msg dl{margin:0;display:grid;grid-template-columns:max-content 1fr;
+          gap:6px 14px;align-items:baseline}
+  .msg dt{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+          letter-spacing:.08em;color:var(--dim);padding-top:2px}
+  .msg dd{margin:0}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;
+        letter-spacing:.08em;text-transform:uppercase;border-radius:99px;
+        padding:2px 9px;margin-left:8px;vertical-align:2px;border:1px solid}
+  .pill.info{color:var(--accent);border-color:#26496f;background:#152232}
+  .pill.warn{color:var(--warn);border-color:#5a4520;background:#2a2113}
+  .pill.stop{color:var(--bad);border-color:#6b2626;background:#2c1616}
+  code{font-family:var(--mono);font-size:.92em;background:#11151a;
+       border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  footer{border-top:1px solid var(--line);margin-top:56px;padding:26px 0 60px;
+         color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <a class="brand" href="../">ft8xss</a>
+  <nav>
+    <a href="../demo/">Demo</a>
+    <a href="../">Project</a>
+    <a href="https://github.com/detournemint/ft8xss">GitHub</a>
+  </nav>
+</div></header>
+
+<div class="wrap">
+
+<h1>What the messages mean</h1>
+<p class="lead">
+  Every warning, refusal and banner ft8xss can put in front of you, what
+  actually causes it, and what to do. The <b>?</b> beside a message in the
+  interface links straight to its entry here.
+</p>
+
+<h2>Jump to</h2>
+<ul class="toc">
+  <li><a href="#tx-off">TX is off — click Call CQ…</a></li>
+  <li><a href="#tx-rearm-failed">TX has been off for <i>N</i>s…</a></li>
+  <li><a href="#tx-off-no-gui">TX is off — enable it in WSJT-X</a></li>
+  <li><a href="#no-decodes">No decodes for <i>N</i>s</a></li>
+  <li><a href="#high-swr">HIGH SWR — transmit is blocked</a></li>
+  <li><a href="#power-low">…W of …W (… dB low)</a></li>
+  <li><a href="#alc-high">ALC … above 0.3</a></li>
+  <li><a href="#stalled-qso">…has repeated the same reply</a></li>
+  <li><a href="#no-gui-automation">Must be done in WSJT-X</a></li>
+  <li><a href="#waiting-for-wsjtx">Waiting for WSJT-X</a></li>
+  <li><a href="#band-setup-interrupted">A band setup was interrupted</a></li>
+  <li><a href="#setup-swr-abort">SWR too high to transmit safely</a></li>
+  <li><a href="#drive-busy">Transmitting — wait for the over</a></li>
+  <li><a href="#audio-no-offset">WSJT-X has not reported an offset</a></li>
+</ul>
+
+<h2>Transmit state</h2>
+
+<div class="msg sev-info" id="tx-off">
+  <div class="quote">TX is off — click Call CQ, or a station, to transmit</div>
+  <h3>Nothing is wrong<span class="pill info">normal</span></h3>
+  <p>
+    WSJT-X's <b>Enable Tx</b> is off, and it has been for more than 30 seconds.
+    This is the resting state of a correctly configured station: ft8xss does not
+    arm the transmitter by itself, so between QSOs Enable Tx sits off until you
+    ask for something.
+  </p>
+  <p>
+    It is worth saying out loud only because the failure it prevents is silent —
+    thinking you are calling when nothing is going out. Click <b>Call CQ</b>, or
+    <b>call</b> on any decode, and the transmitter arms as part of that action.
+  </p>
+  <dl>
+    <dt>Cause</dt><dd>Enable Tx is off and auto-arm is disabled (the default).</dd>
+    <dt>Do</dt><dd>Nothing, unless you meant to be transmitting.</dd>
+  </dl>
+</div>
+
+<div class="msg sev-warn" id="tx-rearm-failed">
+  <div class="quote">TX has been off for 72s — automatic re-arm did not take</div>
+  <h3>Auto-arm is on, but Enable Tx would not stay on<span class="pill warn">check</span></h3>
+  <p>
+    You have <b>Auto-arm transmit</b> switched on, so ft8xss tried to put Enable
+    Tx back after a QSO closed — WSJT-X drops it automatically — and it is still
+    off half a minute later. Something is stopping the keystroke landing.
+  </p>
+  <p>
+    Enable Tx is a checkbox with no UDP message behind it, so the only way to
+    set it is to send <code>Alt+N</code> to the WSJT-X window. That fails if the
+    window cannot be found, if the title in your settings does not match the
+    real one, or if xdotool is not installed.
+  </p>
+  <dl>
+    <dt>Check</dt><dd>The Radio panel — if it says automation is unavailable,
+      start at <a href="#no-gui-automation">that entry</a> instead.</dd>
+    <dt>Check</dt><dd><code>FT8XSS_WSJTX_WINDOW</code> matches your real window
+      title.</dd>
+    <dt>Do</dt><dd>Press <b>Enable Tx</b> in the banner, or set it in WSJT-X.
+      Consider turning auto-arm off: with CQ selected it means the station
+      transmits unattended.</dd>
+  </dl>
+  <p>
+    <b>If you saw “auto-recovery failed” instead</b>, you are running a build
+    from before this was corrected. That wording appeared even when auto-arm was
+    switched off and nothing had been attempted, and on many stations the re-arm
+    could never have worked in the first place — it looked for a window titled
+    <code>WSJT-X MOD</code> rather than yours. Update.
+  </p>
+</div>
+
+<div class="msg sev-info" id="tx-off-no-gui">
+  <div class="quote">TX is off — enable it in the WSJT-X window</div>
+  <h3>ft8xss cannot set Enable Tx here<span class="pill info">normal</span></h3>
+  <p>
+    The same state as above, on a station without GUI automation. ft8xss can
+    tell you Enable Tx is off but cannot switch it on, because there is no UDP
+    message for that checkbox. Tick it in WSJT-X yourself.
+  </p>
+  <p>
+    Everything else — decodes, calling, logging, upload, the map — works
+    normally. See <a href="#no-gui-automation">automation unavailable</a>.
+  </p>
+</div>
+
+<h2>Nothing is being heard</h2>
+
+<div class="msg sev-stop" id="no-decodes">
+  <div class="quote">No decodes for 63s — check radio, audio, or USB</div>
+  <h3>The receive path has stopped<span class="pill stop">act</span></h3>
+  <p>
+    FT8 decodes every 15 seconds. On a live band, a minute of silence is not
+    quiet conditions — it is a broken receive chain. The band being genuinely
+    dead is possible but is the least likely explanation.
+  </p>
+  <p>In rough order of likelihood:</p>
+  <dl>
+    <dt>Audio</dt><dd>WSJT-X's input device disappeared or got switched — a USB
+      re-enumeration renames it. Check Settings → Audio in WSJT-X.</dd>
+    <dt>Radio</dt><dd>Still on the right band and mode? Someone or something may
+      have moved the VFO, or the rig powered down.</dd>
+    <dt>USB</dt><dd>The cable or hub dropped. Look for the serial port
+      disappearing from the diagnostics bundle.</dd>
+    <dt>WSJT-X</dt><dd>Stopped or crashed. ft8xss keeps running without it, so
+      the page still looks alive.</dd>
+  </dl>
+</div>
+
+<h2>Antenna and power</h2>
+
+<div class="msg sev-stop" id="high-swr">
+  <div class="quote">HIGH SWR 5.1 — transmit is blocked (limit 3.0). Run the tuner or check the antenna.</div>
+  <h3>Transmit is refused until the match improves<span class="pill stop">blocked</span></h3>
+  <p>
+    A transmission ended with an SWR at or above the limit, so ft8xss has
+    disabled Call CQ, Enable Tx and band setup. This is deliberate: at that
+    mismatch a solid-state final is folding back hard, and repeatedly keying
+    into it is how finals die.
+  </p>
+  <p>
+    Click <b>Run tuner</b> to cycle the ATU. If the SWR does not come down, the
+    problem is outside the radio — wrong antenna for the band, a bad connector,
+    water in a feedline, or a disconnected coax. Fix that before transmitting.
+  </p>
+  <dl>
+    <dt>Limit</dt><dd>SWR 3.0, from <code>SWR_ABORT</code>.</dd>
+    <dt>Clears</dt><dd>Automatically, when a transmission reads below the limit.</dd>
+  </dl>
+</div>
+
+<div class="msg sev-warn" id="power-low">
+  <div class="quote">40m: 8.0 W of 25 W (4.9 dB low)</div>
+  <h3>You are transmitting far less power than the rig is set for<span class="pill warn">check</span></h3>
+  <p>
+    ft8xss measures every transmission. Here the radio is set to 25 W and only
+    8 W came out, with ALC low — meaning WSJT-X is not driving the rig hard
+    enough, not that the radio is faulty.
+  </p>
+  <p>
+    The usual cause is that WSJT-X's <b>Pwr</b> slider is remembered
+    <i>per band</i>. Move to a band you have not calibrated and it inherits
+    whatever the last one used, which can be many dB wrong. That is easy to
+    miss: everything looks normal, you are simply much quieter than you think.
+  </p>
+  <p>
+    ft8xss can correct this itself. Because applying a change means restarting
+    WSJT-X, it only does so while the station is idle — during a QSO you get a
+    <b>Fix drive</b> button instead. You can also set the drive by hand with the
+    <b>TX drive</b> slider in the Radio panel.
+  </p>
+  <dl>
+    <dt>Trips at</dt><dd>Below 70% of the rig's set power.</dd>
+    <dt>Note</dt><dd>Moving the TX audio offset a long way changes the drive
+      too — the transmit filter is not flat — so a large move re-opens this
+      check.</dd>
+  </dl>
+</div>
+
+<div class="msg sev-warn" id="alc-high">
+  <div class="quote">40m: ALC 0.98 above 0.3</div>
+  <h3>You are over-driving the transmitter<span class="pill warn">check</span></h3>
+  <p>
+    ALC action means the rig is compressing to protect itself. For FT8 — a
+    constant-envelope single tone — any significant ALC is wrong. It flattens
+    the waveform, splatters into your neighbours' passbands and can make you
+    <i>harder</i> to decode despite the wattmeter looking healthy.
+  </p>
+  <p>
+    Reduce drive, not power: turn the WSJT-X <b>Pwr</b> slider down until ALC
+    barely moves, then use the rig's own power control to set output. ft8xss
+    will suggest a correction, or <b>Setup band</b> will find it by measurement.
+  </p>
+  <dl>
+    <dt>Target</dt><dd>ALC at or below 0.30; below 0.20 is better.</dd>
+  </dl>
+</div>
+
+<h2>QSOs</h2>
+
+<div class="msg sev-warn" id="stalled-qso">
+  <div class="quote">EA5TT has repeated the same reply to you 3× — it is not receiving your response. Check TX level, or QSY.</div>
+  <h3>They cannot hear you<span class="pill warn">check</span></h3>
+  <p>
+    The other station keeps sending the same message, which means your reply is
+    not getting through. They are transmitting fine; the failure is on your
+    side, and continuing to answer will not fix it.
+  </p>
+  <p>Most common causes, in order:</p>
+  <dl>
+    <dt>Power</dt><dd>You are quieter than you think — see
+      <a href="#power-low">power low</a>. This is the usual one.</dd>
+    <dt>Collision</dt><dd>Someone else is transmitting on your audio offset.
+      <b>Find clear slot</b> moves you.</dd>
+    <dt>Propagation</dt><dd>Genuinely asymmetric paths exist. If they are weak
+      into you, you are probably weaker into them.</dd>
+    <dt>Slot</dt><dd>Transmitting in the same period they are — you would both
+      be deaf to each other.</dd>
+  </dl>
+  <p>
+    <b>Who hears me</b> settles it: if PSK Reporter shows nobody hearing you,
+    the problem is your transmit path, not the other station.
+  </p>
+</div>
+
+<h2>Automation and setup</h2>
+
+<div class="msg sev-info" id="no-gui-automation">
+  <div class="quote">TX enable and band setup must be done in WSJT-X (no window matching 'WSJT-X' on :99)</div>
+  <h3>ft8xss cannot drive the WSJT-X window<span class="pill info">limited</span></h3>
+  <p>
+    A few things exist only in WSJT-X's interface, with no UDP message behind
+    them: <b>Enable Tx</b>, the <b>Pwr</b> slider, and the Log QSO dialog. To
+    reach those, ft8xss sends keystrokes to the window with xdotool. Without
+    that, everything else still works — decodes, calling, logging, upload,
+    telemetry, the map — but those three are yours to do.
+  </p>
+  <p>The reason in brackets tells you which case you are in:</p>
+  <dl>
+    <dt>xdotool not installed</dt><dd>Install <code>xdotool</code> and
+      <code>xwininfo</code>.</dd>
+    <dt>no window matching …</dt><dd>WSJT-X is not running, is on another
+      display, or its title differs. Set
+      <code>FT8XSS_WSJTX_WINDOW</code>.</dd>
+    <dt>disabled by FT8XSS_NO_GUI</dt><dd>You turned it off. Unset it.</dd>
+  </dl>
+  <p>
+    On a desktop this is often the right arrangement — you are sitting in front
+    of WSJT-X anyway. It matters most on a headless station.
+  </p>
+</div>
+
+<div class="msg sev-info" id="waiting-for-wsjtx">
+  <div class="quote">waiting for WSJT-X — it has not sent a packet yet</div>
+  <h3>No UDP traffic has arrived<span class="pill info">wait</span></h3>
+  <p>
+    ft8xss cannot send anything to WSJT-X until WSJT-X has spoken first — it
+    learns where to reply from the packets it receives. Until then, calling and
+    CQ are disabled.
+  </p>
+  <p>
+    If it never clears, WSJT-X is not sending to this machine and port. In
+    WSJT-X: <b>Settings → Reporting</b>, UDP Server set to this host, port
+    2237, <b>Accept UDP requests</b> ticked.
+  </p>
+  <p>
+    One ordering trap catches people: <b>start ft8xss before WSJT-X</b>. If
+    nothing holds the UDP port, WSJT-X binds it itself and ft8xss hears nothing.
+  </p>
+</div>
+
+<div class="msg sev-warn" id="band-setup-interrupted">
+  <div class="quote">a band setup was interrupted; transmit was stopped. Run it again when you are ready.</div>
+  <h3>A calibration died partway through<span class="pill warn">check</span></h3>
+  <p>
+    Band setup arms the transmitter to take its measurements. This run was cut
+    short — the service restarted, or the process was killed — so on the way back
+    up ft8xss stopped transmitting rather than risk leaving the radio armed and
+    calling CQ with nobody watching.
+  </p>
+  <p>
+    Nothing is broken. The drive for that band may be part-way between settings,
+    so run <b>Setup band</b> again when you are ready.
+  </p>
+</div>
+
+<div class="msg sev-stop" id="setup-swr-abort">
+  <div class="quote">SWR 5.1 is too high to transmit safely — run the tuner or check the antenna first</div>
+  <h3>Band setup refused to start<span class="pill stop">blocked</span></h3>
+  <p>
+    Calibrating drive means transmitting several times. Into a bad match that is
+    a series of avoidable hits on the finals, and the readings would be
+    meaningless anyway — a mismatch makes the power figures lie.
+  </p>
+  <p>
+    Sort the antenna first: <b>Run tuner</b>, then check the feedline and that
+    the antenna suits the band. See <a href="#high-swr">high SWR</a>.
+  </p>
+</div>
+
+<div class="msg sev-info" id="drive-busy">
+  <div class="quote">transmitting — wait for the end of the over</div>
+  <h3>The drive change was refused, for now<span class="pill info">retry</span></h3>
+  <p>
+    WSJT-X has no remote control for the Pwr slider, so changing it means
+    editing its configuration and restarting it. Doing that mid-transmission
+    would cut the over in half and can leave CAT PTT latched down. Wait for the
+    end of the over and try again.
+  </p>
+  <p>
+    You will see <code>band setup is running</code> for the same reason — a
+    calibration is already adjusting the same setting.
+  </p>
+</div>
+
+<div class="msg sev-info" id="audio-no-offset">
+  <div class="quote">WSJT-X has not reported an offset yet</div>
+  <h3>Nothing to move relative to<span class="pill info">wait</span></h3>
+  <p>
+    Audio offsets are moved with WSJT-X's own keyboard shortcuts, 60 Hz per
+    press, which needs a known starting point. That comes from WSJT-X's status
+    packets, and none has arrived yet. It clears within a T/R period of WSJT-X
+    starting — if not, see <a href="#waiting-for-wsjtx">waiting for WSJT-X</a>.
+  </p>
+</div>
+
+<h2>Still stuck?</h2>
+<p>
+  Download the <b>diagnostics bundle</b> from the Radio panel and
+  <a href="https://github.com/detournemint/ft8xss/issues">open an issue</a>. It
+  captures versions, radio and audio device detection, live station state,
+  recent errors and the log, with API keys redacted. If a message brought you
+  here and this page did not answer it, that is a documentation bug worth
+  reporting too.
+</p>
+
+</div>
+
+<footer><div class="wrap">
+  <a href="../demo/">live demo</a>
+  · <a href="../">project page</a>
+  · <a href="https://github.com/detournemint/ft8xss">github.com/detournemint/ft8xss</a>
+</div></footer>
+
+</body>
+</html>

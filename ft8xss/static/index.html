@@ -137,6 +137,12 @@
   .driverow .muted{font-size:11px;flex:1}
   .driverow button{padding:2px 10px;font-size:11px}
   .driverow button:disabled{opacity:.4;cursor:default}
+  .helpref{display:inline-block;min-width:15px;height:15px;line-height:15px;
+    margin-left:6px;padding:0 4px;border-radius:99px;font:700 10px/15px
+    ui-monospace,monospace;text-align:center;text-decoration:none;
+    background:rgba(255,255,255,.13);color:inherit;opacity:.75;
+    vertical-align:1px}
+  .helpref:hover{opacity:1;background:rgba(255,255,255,.25)}
   .kv.audio b{display:flex;align-items:center;gap:5px;justify-content:flex-end}
   .nudge{padding:1px 7px;font-size:13px;line-height:1.35;border-radius:5px;
          background:#1b2330;border:1px solid #33404f;color:var(--fg);cursor:pointer}
@@ -344,6 +350,10 @@
       <div id="a-note" class="advice" style="display:none"></div>
       <div class="rigacts"><button id="tunebtn" class="go">Run tuner</button><button id="bandbtn">Setup band</button></div>
       <div style="padding:6px 12px">
+        <a href="https://detournemint.github.io/ft8xss/errors/" target="_blank"
+           rel="noopener"
+           style="font-size:11px;color:var(--dim);border-bottom:1px dotted #4a5666;
+                  text-decoration:none;margin-right:12px">message reference</a>
         <a id="diagbtn" href="/api/diagnostics" download
            style="font-size:11px;color:var(--dim);border-bottom:1px dotted #4a5666;
                   text-decoration:none">download diagnostics</a>
@@ -549,8 +559,9 @@ function applyCaps(c){
   });
   const note = $("#gui-note");
   if (note){
-    note.textContent = caps.gui ? "" :
-      "TX enable and band setup must be done in WSJT-X (" + caps.gui_reason + ")";
+    if (caps.gui) note.textContent = "";
+    else setWarn(note, "TX enable and band setup must be done in WSJT-X ("
+                       + caps.gui_reason + ")", "no-gui-automation");
     note.style.display = caps.gui ? "none" : "";
   }
 }
@@ -747,7 +758,8 @@ function renderThread(){
       </div>`;
   });
   if (rxRepeats >= 2) html += `<div class="stall">${dx} has repeated the same reply to you `
-      + `${rxRepeats+1}× — it is not receiving your response. Check TX level, or QSY.</div>`;
+      + `${rxRepeats+1}× — it is not receiving your response. Check TX level, or QSY.`
+      + helpMark("stalled-qso") + `</div>`;
   el.innerHTML = html;
   el.scrollTop = el.scrollHeight;
 }
@@ -774,9 +786,9 @@ function setSwr(b){
   swrBlock = b;
   const bar = $("#swrbar");
   if (b.blocked){
-    $("#swr-text").textContent =
+    setWarn($("#swr-text"),
       `HIGH SWR ${b.swr} — transmit is blocked (limit ${b.limit}). `
-      + `Run the tuner or check the antenna.`;
+      + `Run the tuner or check the antenna.`, "high-swr");
     bar.style.display = "flex";
   } else { bar.style.display = "none"; }
   ["#cq","#armtx","#bandbtn"].forEach(sel => {
@@ -786,6 +798,21 @@ function setSwr(b){
   });
   measureChrome();
 }
+/* ---- help references ---------------------------------------------------
+   Every message the interface can put in front of an operator has an entry in
+   the online reference. The marker beside it goes straight to that entry, so
+   nobody has to work out what "auto-recovery failed" was supposed to mean. */
+const HELP_BASE = "https://detournemint.github.io/ft8xss/errors/";
+function helpMark(slug){
+  return ` <a class="helpref" href="${HELP_BASE}#${slug}" target="_blank"`
+       + ` rel="noopener" title="What does this mean?">?</a>`;
+}
+function setWarn(el, text, slug){
+  if (!el) return;
+  el.textContent = text;
+  if (slug) el.insertAdjacentHTML("beforeend", helpMark(slug));
+}
+
 /* ---- transmit drive ---------------------------------------------------- */
 /* WSJT-X stores the Pwr slider as attenuation in tenths of a dB, per band:
    0 is full drive, 450 is 45 dB down. The slider runs the intuitive way round
@@ -864,9 +891,10 @@ function setCheck(c){
     bar.className = "chkbar on ok";
   } else {
     $("#chk-lbl").textContent = c.applying ? "ADJUSTING" : "TX CHECK";
-    $("#chk-text").textContent = c.applied
+    setWarn($("#chk-text"), c.applied
       ? `${c.band}: ${c.reason} \u2014 drive corrected, ${c.att} \u2192 ${c.applied}`
-      : `${c.band}: ${c.reason}`;
+      : `${c.band}: ${c.reason}`,
+      c.reason && c.reason.indexOf("ALC") === 0 ? "alc-high" : "power-low");
     // only offer the button when nothing was applied for us
     $("#chk-fix").style.display =
       (c.applied || c.applying) ? "none" : "inline-block";
@@ -917,10 +945,14 @@ $("#bandbtn").onclick = () => {
     ws.send(JSON.stringify({action:"bandsetup"}));
   }
 };
+const BANDFIX_HELP = {aborted: "setup-swr-abort", unavailable: "no-gui-automation",
+                      interrupted: "band-setup-interrupted", error: null};
 function setBandfix(b){
   const el = $("#r-band"); if (!el || !b) return;
   if (b.state === "running"){ el.textContent = `${b.band}: measuring…`; el.className=""; }
-  else if (b.state === "error"){ el.textContent = b.err || "failed"; el.className="err"; }
+  else if (b.state in BANDFIX_HELP){
+    setWarn(el, b.err || "failed", BANDFIX_HELP[b.state]); el.className = "err";
+  }
   else if (b.att != null){
     el.textContent = `${b.band}: att ${b.att}, ${Number(b.po).toFixed(1)}W, ALC ${Number(b.alc).toFixed(2)}`;
     el.className = "";
@@ -1241,12 +1273,22 @@ function updateWarn(){
   if (txOffSince && offFor > 30){
     bar.className = "warnbar on";
     $("#armtx").style.display = caps.gui ? "" : "none";
-    t.textContent = caps.gui
-      ? `TX has been disabled for ${Math.round(offFor)}s — auto-recovery failed`
-      : `TX is disabled — enable it in the WSJT-X window`;
+    // With auto-arm off -- the default, and the recommended setting -- TX being
+    // disabled is simply the resting state, not a failure. Only call it one
+    // when something actually tried and did not succeed.
+    if (!caps.gui){
+      setWarn(t, "TX is off — enable it in the WSJT-X window", "tx-off-no-gui");
+    } else if (caps.auto_arm){
+      setWarn(t, `TX has been off for ${Math.round(offFor)}s — `
+               + "automatic re-arm did not take", "tx-rearm-failed");
+    } else {
+      setWarn(t, "TX is off — click Call CQ, or a station, to transmit",
+              "tx-off");
+    }
   } else if (age > 45){
     bar.className = "warnbar on crit"; $("#armtx").style.display = "none";
-    t.textContent = `No decodes for ${Math.round(age)}s — check radio, audio, or USB`;
+    setWarn(t, `No decodes for ${Math.round(age)}s — check radio, audio, or USB`,
+            "no-decodes");
   } else { bar.className = "warnbar"; }
 }
 setInterval(updateWarn, 2000);
