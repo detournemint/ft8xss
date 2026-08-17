@@ -1089,9 +1089,23 @@ async def restart_wsjtx_with(att):
           f"tx_enabled={ST.status.get('tx_enabled')}")
 
 
-async def _cq_once():
-    """Arm (verifying) then transmit one CQ. Enable Tx never survives a
-    WSJT-X restart, so this must confirm rather than assume."""
+# What band setup transmits to take a measurement. It must not be a CQ: a
+# calibration is four transmissions soliciting contacts the operator did not ask
+# for, and anyone who answers is left hanging when the run disarms at the end.
+# Free text is the same waveform, the same length and the same power, and nobody
+# replies to it. FT8 free text is 13 characters.
+def probe_message():
+    call = (MY_CALL or "").upper().strip()
+    full = f"{call} TEST"
+    # never truncate mid-word: a chopped callsign is worse than a bare one
+    return (full if len(full) <= 13 else call[:13]).strip() or "TEST"
+
+
+async def _probe_once():
+    """Arm (verifying) then transmit one measurement signal.
+
+    Enable Tx never survives a WSJT-X restart, so this must confirm rather than
+    assume."""
     for attempt in range(3):
         if ST.status.get("tx_enabled") is True:
             break
@@ -1103,8 +1117,7 @@ async def _cq_once():
     else:
         diag.log("[band] could not arm TX")
         return False
-    grid = MY_GRID[:4].upper()
-    PROTO.send_free_text(f"CQ {MY_CALL} {grid}", send=True)
+    PROTO.send_free_text(probe_message(), send=True)
     return True
 
 
@@ -1232,7 +1245,7 @@ async def band_setup(band):
         pct = (ST.rig or {}).get("rfpower_pct") or 25
         target = pct                       # rig is 100W nominal -> pct == watts
         bs = BandSetup(
-            rig_cmd=rig_cmd, set_tx=set_tx, send_cq=_cq_once,
+            rig_cmd=rig_cmd, set_tx=set_tx, send_cq=_probe_once,
             get_status=lambda: ST.status,
             log=diag.log,
             restart_wsjtx=restart_wsjtx_with, target_watts=target)

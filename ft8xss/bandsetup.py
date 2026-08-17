@@ -52,7 +52,7 @@ class BandSetup:
                  restart_wsjtx, target_watts):
         self.rig_cmd = rig_cmd
         self.set_tx = set_tx
-        self.send_cq = send_cq
+        self.send_cq = send_cq        # sends one measurement signal, not a CQ
         self.get_status = get_status
         self.log = log
         self.restart_wsjtx = restart_wsjtx

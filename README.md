@@ -37,7 +37,9 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
 - **Automatic logging and QRZ upload**
 - **Rig telemetry** — live PO, ALC, SWR and S-meter through hamlib
 - **Automatic band setup** — on band change: tune the ATU if SWR is high, then
-  find the drive that gives full power with clean ALC
+  find the drive that gives full power with clean ALC. It measures by
+  transmitting `<your call> TEST`, not a CQ, so a calibration never solicits
+  contacts it is about to abandon
 - **Transmission check** — every transmission is measured. If power or ALC is
   wrong for the band, ft8xss says so and can correct the drive itself
 - **Clear-slot TX audio** — picks a quiet audio offset before you transmit, and
