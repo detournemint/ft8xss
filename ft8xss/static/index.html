@@ -261,6 +261,7 @@
 
 <div id="swrbar" class="warnbar crit" style="display:none">
   <span class="wtext" id="swr-text"></span>
+  <button id="swr-clear">Override</button>
   <button id="swr-tune" class="warnbtn">Run tuner</button>
 </div>
 
@@ -792,6 +793,8 @@ let swrBlock = {blocked:false};
 function setSwr(b){
   if (!b) return;
   swrBlock = b;
+  const tb = $("#swr-tune");
+  if (tb){ tb.disabled = false; tb.textContent = "Run tuner"; }
   const bar = $("#swrbar");
   if (b.blocked){
     setWarn($("#swr-text"),
@@ -937,7 +940,18 @@ $("#stn-start").onclick = () => {
   ws.send(JSON.stringify({action:"station", state:"running"}));
 };
 
-$("#swr-tune").onclick = () => ws.send(JSON.stringify({action:"tune"}));
+$("#swr-tune").onclick = () => {
+  $("#swr-tune").disabled = true;
+  $("#swr-tune").textContent = "tuning\u2026";
+  ws.send(JSON.stringify({action:"tune"}));
+};
+$("#swr-clear").onclick = () => {
+  if (!confirm("Clear the transmit inhibit?\n\nThe last measured SWR was "
+             + (swrBlock.swr ?? "?") + ". Only do this if you have checked the "
+             + "antenna yourself, or your rig does not report SWR while tuning. "
+             + "Transmitting into a bad match can destroy the finals.")) return;
+  ws.send(JSON.stringify({action:"swrclear"}));
+};
 
 function setTune(t){
   if (!t) return;

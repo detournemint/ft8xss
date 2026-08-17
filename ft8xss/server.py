@@ -637,6 +637,12 @@ async def ws_handler(req):
                 asyncio.create_task(band_setup(b))
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "bandsetup", "ok": bool(b), "who": b or "?"}}))
+            elif act == "swrclear":
+                ok = await clear_swr_block()
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "swrclear", "ok": ok,
+                    "who": "transmit inhibit cleared — you are responsible for "
+                           "the antenna" if ok else "not inhibited"}}))
             elif act == "tune":
                 cur = (ST.rig.get("peak") or {}).get("swr") or 0.0
                 ok = await run_tuner(cur, manual=True)
@@ -919,13 +925,53 @@ async def run_tuner(swr_seen, manual=False):
     await ST.broadcast("tune", ST.tune)
     resp = await rig_cmd("G TUNE")
     ok = resp is not None and "RPRT 0" in resp
-    await asyncio.sleep(6)
+
+    # The ATU keys the radio to tune, which is the one chance to measure SWR
+    # while transmit is inhibited -- an inhibit that a transmission is otherwise
+    # needed to lift. Watch the whole cycle and keep the last reading: the ATU
+    # converges, so the final value is the one that describes the new match.
+    final, samples = None, []
+    end = time.time() + 12
+    keyed = False
+    while time.time() < end:
+        ptt = await rig_cmd("t")
+        if ptt == "1":
+            keyed = True
+            v = await rig_cmd("l SWR")
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                f = None
+            if f and f > 0:
+                samples.append(round(f, 2))
+                final = f
+        elif keyed:
+            break                       # tune cycle finished
+        await asyncio.sleep(0.3)
+    if not keyed:
+        await asyncio.sleep(6)          # rig never reported PTT; give it time
+
     ST.tune["count"] += 1
     ST.tune["swr"] = swr_seen
-    ST.tune["msg"] = (f"tuned at {datetime.now(timezone.utc):%H:%M} "
-                      f"(SWR was {swr_seen:.1f})") if ok else f"tune failed: {resp}"
+    ST.tune["measured"] = final and round(final, 2)
+    if not ok:
+        ST.tune["msg"] = f"tune failed: {resp}"
+    elif final is not None:
+        # swr_seen is 0 when we have no prior reading (a fresh start), and
+        # "SWR 0.0 -> 1.4" reads like a fault rather than a result
+        before = f"SWR {swr_seen:.1f} → " if swr_seen and swr_seen > 0 else "SWR now "
+        ST.tune["msg"] = (f"tuned at {datetime.now(timezone.utc):%H:%M} — "
+                          f"{before}{final:.1f}")
+    else:
+        ST.tune["msg"] = (f"tuned at {datetime.now(timezone.utc):%H:%M} — "
+                          f"rig reported no SWR during the tune")
     await ST.broadcast("tune", ST.tune)
-    diag.log(f"[tune] swr={swr_seen:.2f} manual={manual} ok={ok}")
+    diag.log(f"[tune] swr={swr_seen:.2f} -> {final} manual={manual} ok={ok} "
+             f"samples={samples[-6:]}")
+
+    # feed the result back so a good match lifts the inhibit straight away
+    if ok and final is not None:
+        await note_swr(final, "tuner")
     return ok
 
 
@@ -1698,6 +1744,26 @@ async def note_swr(swr, where=""):
     elif was and not blocked:
         diag.log(f"[swr] {swr:.2f} back within limits ({where}) -- transmit allowed")
     await ST.broadcast("swr", ST.swr_block)
+
+
+async def clear_swr_block(reason="operator override"):
+    """Lift the transmit inhibit on the operator's say-so.
+
+    Not every rig reports SWR while its ATU is tuning, and some do not report it
+    at all. Without a way out by hand, those stations would be stuck inhibited
+    until the service restarted -- the inhibit needs a good reading to lift, and
+    a reading needs a transmission. The operator can see their own antenna; let
+    them say so, and record that they did.
+    """
+    if not ST.swr_block.get("blocked"):
+        return False
+    prev = ST.swr_block.get("swr")
+    diag.log(f"[swr] inhibit cleared by {reason} (last reading {prev})")
+    ST.swr_block = {"blocked": False, "swr": prev, "override": True,
+                    "at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    "limit": SWR_ABORT}
+    await ST.broadcast("swr", ST.swr_block)
+    return True
 
 
 def tx_blocked():

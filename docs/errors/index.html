@@ -210,14 +210,32 @@
     into it is how finals die.
   </p>
   <p>
-    Click <b>Run tuner</b> to cycle the ATU. If the SWR does not come down, the
-    problem is outside the radio — wrong antenna for the band, a bad connector,
-    water in a feedline, or a disconnected coax. Fix that before transmitting.
+    Click <b>Run tuner</b> to cycle the ATU. Tuning keys the radio, so ft8xss
+    measures SWR right through the cycle and lifts the inhibit itself the moment
+    the match comes good — you do not need to transmit to prove it.
+  </p>
+  <p>
+    If the SWR does not come down, the problem is outside the radio: wrong
+    antenna for the band, a bad connector, water in a feedline, a disconnected
+    coax. Fix that before transmitting.
+  </p>
+  <p>
+    <b>Override</b> exists for rigs that do not report SWR while their ATU runs,
+    which would otherwise leave the station inhibited with no way out — lifting
+    the inhibit needs a good reading, and a reading needs a transmission. Use it
+    only when you have checked the antenna yourself. It is recorded in the log.
   </p>
   <dl>
     <dt>Limit</dt><dd>SWR 3.0, from <code>SWR_ABORT</code>.</dd>
-    <dt>Clears</dt><dd>Automatically, when a transmission reads below the limit.</dd>
+    <dt>Clears</dt><dd>When the tuner measures a good match, when a transmission
+      reads below the limit, or by <b>Override</b>.</dd>
   </dl>
+  <p>
+    <b>If running the tuner never unblocked you</b>, you are on a build from
+    before this was fixed: the tuner ran, and often corrected the match, but
+    nothing re-measured, so the inhibit stayed on with a perfectly good antenna.
+    Update.
+  </p>
 </div>
 
 <div class="msg sev-warn" id="power-low">
