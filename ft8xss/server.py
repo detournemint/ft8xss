@@ -1606,6 +1606,33 @@ async def set_drive(att):
                   f"-- WSJT-X restarted, transmit is off")
 
 
+def clear_session(why=""):
+    """Drop everything that describes a station that is on the air.
+
+    Decodes, meters and the session's alerts all become lies the moment the
+    radio is off -- and a stale band-activity list is worse than an empty one,
+    because it looks live. The QSO log is not touched: that is on disk, it is
+    history, and it is the one thing that should outlive the session.
+    """
+    ST.decodes.clear()
+    ST.qsos.clear()
+    ST.seq = 0
+    ST.last_tx_msg = None
+    ST.last_decode_ts = 0.0
+    ST.txcheck = {}
+    ST.bandfix = {}
+    ST.checked_bands.clear()
+    ST.rig = {"ok": False, "power": False}
+    ST.psk = {"count": 0, "median": None, "best": None, "top": [], "at": None}
+    ST.tune = {"last": 0.0, "count": 0, "swr": None, "msg": None}
+    ST.uploads = {"ok": 0, "failed": 0, "last": None}
+    ST.audio = {"tx": None, "rx": None, "hold": False, "auto": AUTO_DF,
+                "note": "", "busy": False}
+    ST.swr_block = {"blocked": False, "swr": None, "at": None}
+    ST.status = {}
+    diag.log(f"[station] session cleared ({why})")
+
+
 async def station_shutdown():
     """Put the station to bed without stopping this server.
 
@@ -1638,6 +1665,7 @@ async def station_shutdown():
         steps.append(f"{unit} stop FAILED ({type(e).__name__})")
     gui.invalidate()
 
+    clear_session("station closed down")
     ST.station = {"state": "idle", "steps": steps,
                   "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
     diag.log("[station] idle: " + "; ".join(steps))
