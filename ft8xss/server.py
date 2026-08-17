@@ -623,8 +623,12 @@ async def ws_handler(req):
                     # never cut power mid-transmission
                     await full_stop()
                     await asyncio.sleep(1)
-                resp = await rig_cmd(f"\\set_powerstat {1 if want else 0}")
-                ok = resp is not None and "RPRT 0" in resp
+                if want and (await rig_cmd("f")) is None:
+                    ok, msg = await cat_power_on()   # rigctld cannot wake it
+                    resp = msg
+                else:
+                    resp = await rig_cmd(f"\\set_powerstat {1 if want else 0}")
+                    ok = resp is not None and "RPRT 0" in resp
                 if ok:
                     await asyncio.sleep(3 if want else 1)
                     ST.rig["power"] = want
@@ -1192,6 +1196,13 @@ async def band_setup(band):
     Needs GUI automation: measuring means transmitting, and changing the Pwr
     slider means restarting WSJT-X.
     """
+    if not band:
+        ST.bandfix = {"band": "", "state": "error",
+                      "err": "no band — WSJT-X has not reported a frequency. "
+                             "Check that it can see the radio."}
+        diag.error("[band] refusing setup: no band known")
+        await ST.broadcast("bandfix", ST.bandfix)
+        return ST.bandfix
     if ST.busy_band:
         return None
     if not gui.available():
@@ -1708,6 +1719,102 @@ async def station_shutdown():
     return all("FAILED" not in x for x in steps)
 
 
+async def _systemctl(verb, unit):
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", verb, unit,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        so, _ = await pr.communicate()
+        return pr.returncode == 0, (so or b"").decode().strip()
+    except Exception:
+        return False, ""
+
+
+async def rig_serial():
+    """(port, speed) for talking to the radio without rigctld in the way.
+
+    Prefers the configured values, then whatever rigctld was told to use, then
+    the first serial port on the box.
+    """
+    port, speed = _env("RIG_PORT", ""), _env("RIG_SPEED", "")
+    if not port or not speed:
+        line = ""
+        try:
+            pr = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "show", "rigctld.service",
+                "-p", "ExecStart", "--value",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            so, _ = await pr.communicate()
+            line = (so or b"").decode(errors="replace")
+        except Exception:
+            pass
+        m = re.search(r"-r\s+(\S+)", line or "")
+        if m and not port:
+            port = m.group(1)
+        m = re.search(r"-s\s+(\d+)", line or "")
+        if m and not speed:
+            speed = m.group(1)
+    if not port:
+        cands = sorted([str(x) for x in Path("/dev").glob("ttyUSB*")]
+                       + [str(x) for x in Path("/dev").glob("ttyACM*")])
+        port = cands[0] if cands else ""
+    return port, speed or "38400"
+
+
+async def cat_power_on():
+    """Switch the radio on by writing to the serial port directly.
+
+    hamlib cannot open a rig that is not answering, so rigctld dies on startup
+    against a radio that is switched off -- which means the one command that
+    would wake it never gets sent. The USB-serial bridge stays enumerated on the
+    radio's standby power, so the port is there even when the radio is not
+    listening. Write the Yaesu power-on straight to it, then let rigctld back in.
+    """
+    port, speed = await rig_serial()
+    if not port or not Path(port).exists():
+        return False, "no serial port — the radio has no power at all"
+
+    await _systemctl("stop", "rigctld.service")     # it must let go of the port
+    await asyncio.sleep(0.5)
+
+    def _write():
+        import termios
+        fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            a = termios.tcgetattr(fd)
+            baud = getattr(termios, f"B{speed}", termios.B38400)
+            a[4] = a[5] = baud                       # ispeed, ospeed
+            a[0] = a[1] = a[3] = 0                   # raw: no processing, no echo
+            a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+            termios.tcsetattr(fd, termios.TCSANOW, a)
+            # Yaesu CAT wants a wake-up byte before it will listen from standby
+            os.write(fd, b";")
+            time.sleep(0.2)
+            os.write(fd, b"PS1;")
+            return True
+        finally:
+            os.close(fd)
+
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _write)
+    except Exception as e:
+        await _systemctl("start", "rigctld.service")
+        return False, f"could not write to {port}: {type(e).__name__}: {e}"
+
+    diag.log(f"[power] PS1; written to {port} at {speed} baud")
+    await asyncio.sleep(6)              # the radio takes a few seconds to boot
+    await _systemctl("start", "rigctld.service")
+    for _ in range(8):
+        await asyncio.sleep(1.5)
+        f = await rig_cmd("f")
+        if f and f.strip().isdigit() and int(f) > 0:
+            ST.rig["power"] = True
+            return True, f"radio powered on — dial {int(f)/1e6:.3f} MHz"
+    return False, ("wrote the power-on but the radio did not answer — check that "
+                   "CAT power-on is enabled in its menu, and the port and baud "
+                   "rate are right")
+
+
 def radio_present():
     """Is the radio on the USB bus at all?
 
@@ -1797,6 +1904,17 @@ async def preflight():
         state = "unknown"
     add(f"{unit}", state == "active", state)
 
+    wdial = (ST.status or {}).get("dial")
+    rigf = int(freq) if cat else None
+    agrees = bool(wdial and rigf and abs(int(wdial) - rigf) < 10_000)
+    add("WSJT-X sees the radio", agrees,
+        (f"{int(wdial)/1e6:.3f} MHz" if agrees else
+         ("WSJT-X reports no frequency — its CAT link is dead. It was probably "
+          "started while the radio was off; restart it"
+          if not wdial else
+          f"WSJT-X says {int(wdial)/1e6:.3f} MHz, the radio says "
+          f"{(rigf or 0)/1e6:.3f} MHz")))
+
     add("WSJT-X talking to us", ST.wsjtx_addr is not None,
         "no UDP packet yet — check Reporting → UDP Server in WSJT-X"
         if ST.wsjtx_addr is None else f"{ST.wsjtx_addr[0]}:{ST.wsjtx_addr[1]}")
@@ -1814,35 +1932,27 @@ async def station_start():
     # rigctld gives up and restart-loops when it starts against a radio that is
     # switched off, and stays useless after the radio comes back. If it is not
     # answering, restart it before deciding the radio is at fault.
-    if radio_present() and (await rig_cmd("f")) is None:
-        try:
-            pr = await asyncio.create_subprocess_exec(
-                "systemctl", "--user", "restart", "rigctld.service",
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await pr.wait()
-            await asyncio.sleep(3)
-            steps.append("rigctld restarted (it was not answering)")
-        except Exception as e:
-            steps.append(f"rigctld restart FAILED ({type(e).__name__})")
-
-    if radio_present():
-        resp = await rig_cmd("\\set_powerstat 1")
-        if resp is not None and "RPRT 0" in resp:
-            steps.append("radio powered on")
-            await asyncio.sleep(4)      # the rig needs a moment before CAT works
-            ST.rig["power"] = True
-        else:
-            steps.append("radio did not answer a power-on over CAT")
+    if not radio_present():
+        steps.append("radio is not on the USB bus — it has no power at all")
+    elif (await rig_cmd("f")) is not None:
+        steps.append("radio already awake")
+        ST.rig["power"] = True
     else:
-        steps.append("radio is not on the USB bus")
+        # rigctld cannot open a radio that is not answering, so it is no use for
+        # waking one. Go at the serial port directly.
+        ok, msg = await cat_power_on()
+        steps.append(msg)
 
+    # Restart, not start. WSJT-X opens its CAT link once, at launch: an instance
+    # that came up while the radio was off sits there reading 0.000 000 and
+    # "OOB" forever, and `start` on a running unit does nothing to fix it.
     unit = _env("WSJTX_UNIT", "wsjtx.service")
     try:
         pr = await asyncio.create_subprocess_exec(
-            "systemctl", "--user", "start", unit,
+            "systemctl", "--user", "restart", unit,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         _, err = await pr.communicate()
-        steps.append(f"{unit} started" if pr.returncode == 0
+        steps.append(f"{unit} restarted" if pr.returncode == 0
                      else f"{unit} start FAILED ({(err or b'').decode()[:80]})")
     except Exception as e:
         steps.append(f"{unit} start FAILED ({type(e).__name__})")
