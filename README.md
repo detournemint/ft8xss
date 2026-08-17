@@ -4,6 +4,12 @@ A browser front end for **WSJT-X**. Live decodes, click-to-call, logging, QRZ
 upload, DXCC tracking, propagation data and rig telemetry — from a phone,
 laptop or tablet.
 
+### [▶ Try it out — live demo](https://detournemint.github.io/ft8xss/demo/)
+
+The real interface running on canned data. Nothing is connected to a radio, so
+every control is inert, but the decodes, map, logbook and settings are all
+there to click through. No install.
+
 > **This software keys your transmitter.** You are the control operator. Read
 > the safety notes below before running it.
 

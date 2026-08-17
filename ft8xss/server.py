@@ -564,7 +564,7 @@ async def ws_handler(req):
         "qsos": ST.qsos[-30:], "uploads": ST.uploads, "rig": ST.rig,
         "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
         "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
-        "station": ST.station,
+        "station": ST.station, "drive": drive_state(),
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
         "entities": sorted(ST.worked_entities),
@@ -655,6 +655,10 @@ async def ws_handler(req):
                         ok = bool(cur and cur.isdigit() and abs(int(cur) - hz) < 100)
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "setfreq", "ok": ok, "who": f"{hz/1e6:.3f}"}}))
+            elif act == "setdrive":
+                ok, msg = await set_drive(req_msg.get("att"))
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "setdrive", "ok": ok, "who": msg}}))
             elif act == "station":
                 want = req_msg.get("state")
                 if want == "idle":
@@ -735,7 +739,7 @@ async def api_state(req):
         "wsjtx": str(ST.wsjtx_addr), "worked_count": len(ST.worked),
         "rig": ST.rig, "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
         "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
-        "station": ST.station,
+        "station": ST.station, "drive": drive_state(),
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
@@ -1108,6 +1112,28 @@ async def band_change(band):
     await ST.broadcast("bandfix", ST.bandfix)
 
 
+# Left behind while band setup is running, so a restart can tell that the
+# previous process died with the transmitter armed. A finally block cannot help
+# when the process is killed outright.
+SETUP_MARKER = Path.home() / ".cache/ft8xss/band-setup-running"
+
+
+async def recover_interrupted_setup():
+    """If a previous run died mid band-setup, make sure nothing is transmitting."""
+    if not SETUP_MARKER.exists():
+        return
+    band = SETUP_MARKER.read_text().strip() or "?"
+    SETUP_MARKER.unlink(missing_ok=True)
+    diag.error(f"[band] previous {band} setup was interrupted -- "
+               f"stopping transmit in case it left the radio armed")
+    await asyncio.sleep(2)          # let the first Status packet arrive
+    await full_stop()
+    ST.bandfix = {"band": band, "state": "interrupted",
+                  "err": "a band setup was interrupted; transmit was stopped. "
+                         "Run it again when you are ready."}
+    await ST.broadcast("bandfix", ST.bandfix)
+
+
 async def band_setup(band):
     """Tune if needed, then find the drive that gives full power with clean ALC.
 
@@ -1132,6 +1158,13 @@ async def band_setup(band):
     ST.busy_band = True
     ST.bandfix = {"band": band, "state": "running"}
     await ST.broadcast("bandfix", ST.bandfix)
+    # Band setup arms the transmitter to take its measurements. If it is
+    # interrupted -- cancelled, or the service restarted under it -- the
+    # transmitter must not be left armed, or WSJT-X carries on calling CQ with
+    # nobody watching. Remember what we found, and put it back whatever happens.
+    was_enabled = ST.status.get("tx_enabled") is True
+    SETUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    SETUP_MARKER.write_text(f"{band}\n")
     try:
         pct = (ST.rig or {}).get("rfpower_pct") or 25
         target = pct                       # rig is 100W nominal -> pct == watts
@@ -1148,6 +1181,10 @@ async def band_setup(band):
         diag.log(f"[band] {band}: {type(e).__name__}: {e}")
     finally:
         ST.busy_band = False
+        if not was_enabled and ST.status.get("tx_enabled") is True:
+            diag.log(f"[band] {band}: setup armed the transmitter; disarming")
+            await set_tx(False)
+        SETUP_MARKER.unlink(missing_ok=True)
     await ST.broadcast("bandfix", ST.bandfix)
     return ST.bandfix
 
@@ -1458,6 +1495,55 @@ def _drive_correction(po, alc, target_w, att):
             return max(30, att - step), (f"{po:.1f} W of {target_w} W "
                                          f"({need_db:.1f} dB low)")
     return None, "within tolerance"
+
+
+# WSJT-X's Pwr slider is stored as attenuation in tenths of a dB: 0 is full
+# drive, 450 is 45 dB down. It is remembered per band, which is why a band with
+# no calibration of its own inherits whatever the last one used.
+ATT_MIN, ATT_MAX = 0, 450
+
+
+def drive_state():
+    """Current transmit drive, and what we have stored for each band."""
+    att = bs_read_att()
+    band = band_of(ST.status.get("dial"))
+    return {"att": att, "band": band, "stored": bs_drive(),
+            "db": None if att is None else round(att / 10.0, 1),
+            "min": ATT_MIN, "max": ATT_MAX,
+            "gui": gui.available(), "gui_reason": gui.reason()}
+
+
+async def set_drive(att):
+    """Apply a transmit drive setting and remember it for this band.
+
+    Changing the Pwr slider means editing WSJT-X's config and restarting it,
+    because there is no UDP message for it. That is disruptive, so this refuses
+    while the radio is keyed rather than cutting a transmission in half.
+    """
+    if not gui.available():
+        return False, f"needs GUI automation ({gui.reason()})"
+    if ST.busy_band:
+        return False, "band setup is running"
+    if ST.status.get("transmitting"):
+        return False, "transmitting -- wait for the end of the over"
+    try:
+        att = int(att)
+    except (TypeError, ValueError):
+        return False, "not a number"
+    if not ATT_MIN <= att <= ATT_MAX:
+        return False, f"must be between {ATT_MIN} and {ATT_MAX}"
+
+    band = band_of(ST.status.get("dial"))
+    diag.log(f"[drive] {band}: setting attenuation to {att} (manual)")
+    await restart_wsjtx_with(att)
+    if band:
+        d = bs_drive(); d[band] = att
+        from bandsetup import save_drive
+        save_drive(d)
+        ST.checked_bands.add(band)     # the operator has spoken; stop correcting
+    await ST.broadcast("drive", drive_state())
+    return True, (f"{band or 'drive'} set to -{att / 10:.1f} dB "
+                  f"-- WSJT-X restarted, transmit is off")
 
 
 async def station_shutdown():
@@ -1796,6 +1882,7 @@ async def main():
     asyncio.create_task(psk_poll())
     asyncio.create_task(bands_poll())
     asyncio.create_task(seed_from_qrz())
+    asyncio.create_task(recover_interrupted_setup())
     asyncio.create_task(tx_watchdog())
     asyncio.create_task(deadman())
 

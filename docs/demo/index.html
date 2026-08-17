@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ft8xss</title>
+<title>ft8xss — live demo</title>
 <style>
   :root{
     --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e6e9ee; --dim:#8b95a3;
@@ -455,7 +455,274 @@
 <div id="ptip"></div>
 <div id="toast"></div>
 
-<script src="/static/worldmap.js"></script>
+<script>
+/* Azimuthal-equidistant map centred on the operator's QTH.
+   Distance from centre is true great-circle distance; angle is true bearing.
+   Coastlines are a deliberately coarse outline -- enough to orient by, small
+   enough to inline with no external requests. */
+
+const COAST = [
+  // North America
+  [[71,-156],[70,-141],[69,-131],[68,-120],[67,-108],[68,-95],[73,-85],[76,-95],[74,-110],[72,-125],[71,-156]],
+  [[60,-141],[58,-135],[54,-130],[49,-125],[43,-124],[38,-123],[34,-120],[32,-117],[28,-114],[23,-110],
+   [23,-106],[20,-105],[17,-100],[16,-95],[15,-92],[13,-88],[9,-83],[8,-78],[9,-77],[12,-83],[15,-83],
+   [18,-88],[21,-87],[25,-97],[29,-94],[30,-89],[30,-84],[26,-80],[32,-81],[36,-76],[40,-74],[44,-70],
+   [45,-67],[47,-65],[50,-60],[52,-56],[56,-61],[58,-68],[62,-78],[64,-88],[60,-95],[58,-94],[57,-89],
+   [54,-82],[52,-79],[55,-77],[58,-78],[62,-78]],
+  [[60,-165],[62,-165],[65,-168],[66,-162],[70,-160],[71,-156]],
+  // South America
+  [[12,-72],[11,-64],[8,-60],[5,-52],[0,-50],[-5,-36],[-8,-35],[-13,-38],[-18,-39],[-23,-43],[-27,-48],
+   [-33,-53],[-38,-57],[-42,-63],[-47,-66],[-52,-68],[-55,-67],[-54,-72],[-50,-74],[-45,-74],[-40,-73],
+   [-35,-72],[-30,-71],[-25,-70],[-20,-70],[-15,-75],[-10,-78],[-5,-81],[0,-80],[5,-77],[9,-78],[12,-72]],
+  // Europe
+  [[71,28],[70,20],[68,15],[64,11],[62,5],[58,6],[57,10],[54,9],[53,5],[51,3],[49,0],[48,-4],[46,-1],
+   [43,-2],[43,-9],[38,-9],[37,-6],[36,-5],[38,0],[41,3],[43,7],[44,12],[41,15],[38,16],[40,18],[42,19],
+   [45,14],[45,13],[46,13],[45,15],[42,19]],
+  [[60,-5],[58,-6],[55,-6],[52,-10],[51,-5],[54,-3],[57,-2],[58,-3],[60,-5]],
+  // Africa
+  [[37,10],[33,11],[31,20],[31,25],[27,34],[22,37],[15,40],[11,43],[5,45],[0,42],[-5,39],[-11,40],
+   [-17,36],[-22,35],[-27,32],[-33,27],[-34,20],[-31,17],[-25,15],[-18,12],[-12,13],[-6,12],[0,9],
+   [5,4],[6,-2],[5,-8],[9,-13],[13,-17],[18,-16],[24,-15],[28,-12],[33,-8],[35,-2],[37,3],[37,10]],
+  // Asia
+  [[71,28],[70,45],[73,60],[73,75],[75,90],[74,105],[72,120],[70,135],[69,150],[66,165],[62,179],
+   [60,165],[58,155],[55,140],[50,140],[46,143],[43,132],[39,127],[35,126],[31,122],[24,118],[21,110],
+   [17,108],[10,105],[8,100],[13,98],[16,94],[21,90],[22,88],[19,85],[16,81],[11,76],[8,77],[13,74],
+   [19,73],[23,68],[25,63],[27,57],[25,52],[20,40],[15,40]],
+  [[36,36],[38,27],[40,26],[41,29],[43,35],[41,41],[38,48],[30,48],[27,52],[25,57],[27,57]],
+  // India/SE Asia detail is folded into the Asia outline above
+  // Australia / NZ
+  [[-11,131],[-12,137],[-15,141],[-19,147],[-24,153],[-28,153],[-33,151],[-38,146],[-38,141],[-35,138],
+   [-32,134],[-32,127],[-34,120],[-32,116],[-26,113],[-22,114],[-18,122],[-14,127],[-11,131]],
+  [[-35,173],[-38,177],[-41,175],[-46,168],[-45,167],[-41,172],[-37,174],[-35,173]],
+  // Greenland / Iceland
+  [[83,-33],[81,-18],[76,-19],[70,-22],[65,-40],[70,-52],[76,-60],[80,-65],[83,-45],[83,-33]],
+  [[66,-23],[65,-14],[64,-15],[63,-20],[65,-24],[66,-23]],
+  // Antarctica (partial rim)
+  [[-70,-60],[-72,-30],[-70,0],[-69,30],[-67,60],[-66,90],[-67,120],[-70,150],[-75,180],[-78,-150],
+   [-75,-110],[-72,-80],[-70,-60]],
+];
+
+const R_EARTH = 6371;
+const HALF_CIRC = Math.PI * R_EARTH;      // 20015 km to the antipode
+
+function toRad(d) { return d * Math.PI / 180; }
+
+/** great-circle distance (km) and initial bearing (rad) from a to b */
+function gc(aLat, aLon, bLat, bLon) {
+  const p1 = toRad(aLat), p2 = toRad(bLat);
+  const dl = toRad(bLon - aLon), dp = p2 - p1;
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  const d = 2 * R_EARTH * Math.asin(Math.min(1, Math.sqrt(h)));
+  const br = Math.atan2(Math.sin(dl) * Math.cos(p2),
+                        Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl));
+  return [d, br];
+}
+
+class AzMap {
+  constructor(canvas, homeLat, homeLon) {
+    this.c = canvas;
+    this.home = [homeLat, homeLon];
+    this.pts = [];
+    canvas.addEventListener("click", e => this._click(e));
+    this._hit = [];
+  }
+
+  _size() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.c.clientWidth || 340, h = this.c.clientHeight || 300;
+    if (this.c.width !== w * dpr || this.c.height !== h * dpr) {
+      this.c.width = w * dpr; this.c.height = h * dpr;
+    }
+    const x = this.c.getContext("2d");
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return [x, w, h];
+  }
+
+  /** lat/lon -> canvas x,y (null if beyond the drawable rim) */
+  proj(lat, lon, cx, cy, rad) {
+    const [d, br] = gc(this.home[0], this.home[1], lat, lon);
+    const r = (d / HALF_CIRC) * rad;
+    return [cx + r * Math.sin(br), cy - r * Math.cos(br), d];
+  }
+
+  draw(stations) {
+    const [x, w, h] = this._size();
+    const cx = w / 2, cy = h / 2, rad = Math.min(w, h) / 2 - 10;
+    x.clearRect(0, 0, w, h);
+
+    // ocean disc
+    x.beginPath(); x.arc(cx, cy, rad, 0, 7);
+    x.fillStyle = "#0b1016"; x.fill();
+    x.strokeStyle = "#2b3440"; x.lineWidth = 1; x.stroke();
+
+    // distance rings every 5000 km
+    x.strokeStyle = "#1b232e"; x.setLineDash([2, 3]);
+    for (const km of [5000, 10000, 15000]) {
+      x.beginPath(); x.arc(cx, cy, (km / HALF_CIRC) * rad, 0, 7); x.stroke();
+    }
+    // bearing spokes
+    for (let b = 0; b < 360; b += 45) {
+      const a = toRad(b);
+      x.beginPath(); x.moveTo(cx, cy);
+      x.lineTo(cx + rad * Math.sin(a), cy - rad * Math.cos(a)); x.stroke();
+    }
+    x.setLineDash([]);
+
+    // coastlines
+    x.strokeStyle = "#39485a"; x.lineWidth = 1;
+    for (const poly of COAST) {
+      x.beginPath();
+      let started = false, prev = null;
+      for (const [la, lo] of poly) {
+        const [px, py, d] = this.proj(la, lo, cx, cy, rad);
+        // a segment that jumps across the far rim would draw a false chord
+        if (prev && Math.hypot(px - prev[0], py - prev[1]) > rad * 0.9) { started = false; }
+        if (!started) { x.moveTo(px, py); started = true; } else { x.lineTo(px, py); }
+        prev = [px, py];
+      }
+      x.stroke();
+    }
+
+    // bearing labels
+    x.fillStyle = "#5d6b7d"; x.font = "10px ui-monospace,monospace";
+    x.textAlign = "center";
+    const labels = [["N", 0], ["E", 90], ["S", 180], ["W", 270]];
+    for (const [t, b] of labels) {
+      const a = toRad(b), rr = rad - 8;
+      x.fillText(t, cx + rr * Math.sin(a), cy - rr * Math.cos(a) + 3);
+    }
+
+    // stations
+    this._hit = [];
+    const seen = new Set();
+    for (const s of stations) {
+      if (!s.ll) continue;
+      const key = s.grid;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [px, py] = this.proj(s.ll[0], s.ll[1], cx, cy, rad);
+      const col = s.to_me ? "#2ee06a" : s.cq ? "#f0a02c" : s.worked ? "#5d6b7d" : "#4aa3ff";
+      // stronger signals draw larger
+      const size = s.snr >= 0 ? 4.2 : s.snr >= -12 ? 3.2 : 2.3;
+      x.beginPath(); x.arc(px, py, size, 0, 7);
+      x.fillStyle = col; x.fill();
+      if (s.to_me) { x.strokeStyle = "#2ee06a"; x.lineWidth = 1;
+                     x.beginPath(); x.arc(px, py, size + 3, 0, 7); x.stroke(); }
+      this._hit.push({ x: px, y: py, s });
+    }
+
+    // home
+    x.strokeStyle = "#ff5d5d"; x.lineWidth = 1.5;
+    x.beginPath(); x.arc(cx, cy, 4, 0, 7); x.stroke();
+    x.beginPath(); x.moveTo(cx - 7, cy); x.lineTo(cx + 7, cy);
+    x.moveTo(cx, cy - 7); x.lineTo(cx, cy + 7); x.stroke();
+  }
+
+  _click(e) {
+    const r = this.c.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    let best = null, bd = 12;
+    for (const p of this._hit) {
+      const d = Math.hypot(p.x - mx, p.y - my);
+      if (d < bd) { bd = d; best = p.s; }
+    }
+    if (best && this.onpick) this.onpick(best);
+  }
+}
+
+</script>
+<script>
+/* ------------------------------------------------------------------------
+   Demo shim. Replaces the network layer with canned data so the interface
+   can be published as a static page. Everything above this line is the
+   station's real code, unmodified.
+   ------------------------------------------------------------------------ */
+(function(){
+  const DEMO = {"snapshot":{"status":{"dial":14074000,"mode":"FT8","dx_call":"EA5TT","report":"-09","tx_mode":"FT8","tx_enabled":false,"transmitting":false,"decoding":false,"rx_df":1500,"tx_df":1620,"de_call":"N0CALL","de_grid":"CM87ws","dx_grid":"IM98","tx_watchdog":false,"sub_mode":"","fast_mode":false,"tx_message":"EA5TT N0CALL -09"},"decodes":[{"id":1,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-8,"dt":0.2,"df":1240,"mode":"~","msg":"CQ VK3ANP QF22","low":false,"sender":"VK3ANP","to":null,"grid":"QF22","cq":true,"km":12659,"bearing":240,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Australia","new_entity":true},{"id":2,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-14,"dt":0.1,"df":1478,"mode":"~","msg":"CQ JA1XYZ PM95","low":false,"sender":"JA1XYZ","to":null,"grid":"PM95","cq":true,"km":8356,"bearing":304,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Japan","new_entity":true},{"id":3,"tx":false,"utc":"04:19:17","tms":15557000,"snr":2,"dt":-0.3,"df":902,"mode":"~","msg":"N0CALL EA5TT IM98","low":false,"sender":"EA5TT","to":"N0CALL","grid":"IM98","cq":false,"km":9615,"bearing":42,"worked":false,"to_me":true,"dial":14074000,"band":"20m","entity":"Spain","new_entity":true},{"id":4,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-20,"dt":0.4,"df":2104,"mode":"~","msg":"CQ DL9ZZZ JO62","low":true,"sender":"DL9ZZZ","to":null,"grid":"JO62","cq":true,"km":9081,"bearing":26,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Germany","new_entity":true},{"id":5,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-3,"dt":0.0,"df":1655,"mode":"~","msg":"CQ LU4AA GF05","low":false,"sender":"LU4AA","to":null,"grid":"GF05","cq":true,"km":10342,"bearing":133,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Argentina","new_entity":true},{"id":6,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-10,"dt":0.1,"df":660,"mode":"~","msg":"CQ POTA W7ABC CN87","low":false,"sender":"W7ABC","to":null,"grid":"CN87","cq":true,"km":1084,"bearing":357,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":7,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-16,"dt":0.3,"df":2410,"mode":"~","msg":"CQ SV1EAG KM17","low":false,"sender":"SV1EAG","to":null,"grid":"KM17","cq":true,"km":10913,"bearing":27,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Greece","new_entity":true},{"id":8,"tx":false,"utc":"04:19:17","tms":15557000,"snr":4,"dt":0.1,"df":1120,"mode":"~","msg":"CQ K5DXX EM12","low":false,"sender":"K5DXX","to":null,"grid":"EM12","cq":true,"km":2351,"bearing":97,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":9,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-12,"dt":0.2,"df":1830,"mode":"~","msg":"W6TOX ZL2AAA RE78","low":false,"sender":"ZL2AAA","to":"W6TOX","grid":"RE78","cq":false,"km":10876,"bearing":222,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"New Zealand","new_entity":true},{"id":10,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-5,"dt":0.1,"df":980,"mode":"~","msg":"CQ VE6NIX DO31","low":false,"sender":"VE6NIX","to":null,"grid":"DO31","cq":true,"km":1686,"bearing":22,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Canada","new_entity":false},{"id":11,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-18,"dt":0.5,"df":2280,"mode":"~","msg":"CQ 3D2USU RH82","low":false,"sender":"3D2USU","to":null,"grid":"RH82","cq":true,"km":8837,"bearing":238,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Fiji","new_entity":true},{"id":12,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-1,"dt":0.1,"df":1390,"mode":"~","msg":"CQ KB9XYZ EN52","low":false,"sender":"KB9XYZ","to":null,"grid":"EN52","cq":true,"km":2846,"bearing":69,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":13,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-22,"dt":0.2,"df":745,"mode":"~","msg":"CQ TF3ABC HP94","low":true,"sender":"TF3ABC","to":null,"grid":"HP94","cq":true,"km":6766,"bearing":29,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Iceland","new_entity":true},{"id":14,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-7,"dt":0.0,"df":2050,"mode":"~","msg":"CQ CT1FMX IM58","low":false,"sender":"CT1FMX","to":null,"grid":"IM58","cq":true,"km":9123,"bearing":47,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Portugal","new_entity":true},{"id":15,"tx":false,"utc":"04:19:17","tms":15557000,"snr":7,"dt":0.1,"df":1705,"mode":"~","msg":"CQ W1AW FN31","low":false,"sender":"W1AW","to":null,"grid":"FN31","cq":true,"km":4171,"bearing":68,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":16,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-17,"dt":0.2,"df":880,"mode":"~","msg":"CQ PY2XYZ GG66","low":false,"sender":"PY2XYZ","to":null,"grid":"GG66","cq":true,"km":10378,"bearing":117,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Brazil","new_entity":false},{"id":17,"tx":false,"utc":"04:19:17","tms":15557000,"snr":-2,"dt":0.1,"df":2190,"mode":"~","msg":"CQ OH2BBB KP20","low":false,"sender":"OH2BBB","to":null,"grid":"KP20","cq":true,"km":8684,"bearing":16,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Finland","new_entity":true},{"id":18,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-7,"dt":0.2,"df":1240,"mode":"~","msg":"CQ VK3ANP QF22","low":false,"sender":"VK3ANP","to":null,"grid":"QF22","cq":true,"km":12659,"bearing":240,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Australia","new_entity":true},{"id":19,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-13,"dt":0.1,"df":1478,"mode":"~","msg":"CQ JA1XYZ PM95","low":false,"sender":"JA1XYZ","to":null,"grid":"PM95","cq":true,"km":8356,"bearing":304,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Japan","new_entity":true},{"id":20,"tx":false,"utc":"04:19:32","tms":15572000,"snr":3,"dt":-0.3,"df":902,"mode":"~","msg":"N0CALL EA5TT IM98","low":false,"sender":"EA5TT","to":"N0CALL","grid":"IM98","cq":false,"km":9615,"bearing":42,"worked":false,"to_me":true,"dial":14074000,"band":"20m","entity":"Spain","new_entity":true},{"id":21,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-19,"dt":0.4,"df":2104,"mode":"~","msg":"CQ DL9ZZZ JO62","low":false,"sender":"DL9ZZZ","to":null,"grid":"JO62","cq":true,"km":9081,"bearing":26,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Germany","new_entity":true},{"id":22,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-2,"dt":0.0,"df":1655,"mode":"~","msg":"CQ LU4AA GF05","low":false,"sender":"LU4AA","to":null,"grid":"GF05","cq":true,"km":10342,"bearing":133,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Argentina","new_entity":true},{"id":23,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-9,"dt":0.1,"df":660,"mode":"~","msg":"CQ POTA W7ABC CN87","low":false,"sender":"W7ABC","to":null,"grid":"CN87","cq":true,"km":1084,"bearing":357,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":24,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-15,"dt":0.3,"df":2410,"mode":"~","msg":"CQ SV1EAG KM17","low":false,"sender":"SV1EAG","to":null,"grid":"KM17","cq":true,"km":10913,"bearing":27,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Greece","new_entity":true},{"id":25,"tx":false,"utc":"04:19:32","tms":15572000,"snr":5,"dt":0.1,"df":1120,"mode":"~","msg":"CQ K5DXX EM12","low":false,"sender":"K5DXX","to":null,"grid":"EM12","cq":true,"km":2351,"bearing":97,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":26,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-11,"dt":0.2,"df":1830,"mode":"~","msg":"W6TOX ZL2AAA RE78","low":false,"sender":"ZL2AAA","to":"W6TOX","grid":"RE78","cq":false,"km":10876,"bearing":222,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"New Zealand","new_entity":true},{"id":27,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-4,"dt":0.1,"df":980,"mode":"~","msg":"CQ VE6NIX DO31","low":false,"sender":"VE6NIX","to":null,"grid":"DO31","cq":true,"km":1686,"bearing":22,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Canada","new_entity":false},{"id":28,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-17,"dt":0.5,"df":2280,"mode":"~","msg":"CQ 3D2USU RH82","low":false,"sender":"3D2USU","to":null,"grid":"RH82","cq":true,"km":8837,"bearing":238,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Fiji","new_entity":true},{"id":29,"tx":false,"utc":"04:19:32","tms":15572000,"snr":0,"dt":0.1,"df":1390,"mode":"~","msg":"CQ KB9XYZ EN52","low":false,"sender":"KB9XYZ","to":null,"grid":"EN52","cq":true,"km":2846,"bearing":69,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":30,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-21,"dt":0.2,"df":745,"mode":"~","msg":"CQ TF3ABC HP94","low":true,"sender":"TF3ABC","to":null,"grid":"HP94","cq":true,"km":6766,"bearing":29,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Iceland","new_entity":true},{"id":31,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-6,"dt":0.0,"df":2050,"mode":"~","msg":"CQ CT1FMX IM58","low":false,"sender":"CT1FMX","to":null,"grid":"IM58","cq":true,"km":9123,"bearing":47,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Portugal","new_entity":true},{"id":32,"tx":false,"utc":"04:19:32","tms":15572000,"snr":8,"dt":0.1,"df":1705,"mode":"~","msg":"CQ W1AW FN31","low":false,"sender":"W1AW","to":null,"grid":"FN31","cq":true,"km":4171,"bearing":68,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":33,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-16,"dt":0.2,"df":880,"mode":"~","msg":"CQ PY2XYZ GG66","low":false,"sender":"PY2XYZ","to":null,"grid":"GG66","cq":true,"km":10378,"bearing":117,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Brazil","new_entity":false},{"id":34,"tx":false,"utc":"04:19:32","tms":15572000,"snr":-1,"dt":0.1,"df":2190,"mode":"~","msg":"CQ OH2BBB KP20","low":false,"sender":"OH2BBB","to":null,"grid":"KP20","cq":true,"km":8684,"bearing":16,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Finland","new_entity":true},{"id":35,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-6,"dt":0.2,"df":1240,"mode":"~","msg":"CQ VK3ANP QF22","low":false,"sender":"VK3ANP","to":null,"grid":"QF22","cq":true,"km":12659,"bearing":240,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Australia","new_entity":true},{"id":36,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-12,"dt":0.1,"df":1478,"mode":"~","msg":"CQ JA1XYZ PM95","low":false,"sender":"JA1XYZ","to":null,"grid":"PM95","cq":true,"km":8356,"bearing":304,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Japan","new_entity":true},{"id":37,"tx":false,"utc":"04:19:47","tms":15587000,"snr":4,"dt":-0.3,"df":902,"mode":"~","msg":"N0CALL EA5TT IM98","low":false,"sender":"EA5TT","to":"N0CALL","grid":"IM98","cq":false,"km":9615,"bearing":42,"worked":false,"to_me":true,"dial":14074000,"band":"20m","entity":"Spain","new_entity":true},{"id":38,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-18,"dt":0.4,"df":2104,"mode":"~","msg":"CQ DL9ZZZ JO62","low":false,"sender":"DL9ZZZ","to":null,"grid":"JO62","cq":true,"km":9081,"bearing":26,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Germany","new_entity":true},{"id":39,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-1,"dt":0.0,"df":1655,"mode":"~","msg":"CQ LU4AA GF05","low":false,"sender":"LU4AA","to":null,"grid":"GF05","cq":true,"km":10342,"bearing":133,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Argentina","new_entity":true},{"id":40,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-8,"dt":0.1,"df":660,"mode":"~","msg":"CQ POTA W7ABC CN87","low":false,"sender":"W7ABC","to":null,"grid":"CN87","cq":true,"km":1084,"bearing":357,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":41,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-14,"dt":0.3,"df":2410,"mode":"~","msg":"CQ SV1EAG KM17","low":false,"sender":"SV1EAG","to":null,"grid":"KM17","cq":true,"km":10913,"bearing":27,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Greece","new_entity":true},{"id":42,"tx":false,"utc":"04:19:47","tms":15587000,"snr":6,"dt":0.1,"df":1120,"mode":"~","msg":"CQ K5DXX EM12","low":false,"sender":"K5DXX","to":null,"grid":"EM12","cq":true,"km":2351,"bearing":97,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":43,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-10,"dt":0.2,"df":1830,"mode":"~","msg":"W6TOX ZL2AAA RE78","low":false,"sender":"ZL2AAA","to":"W6TOX","grid":"RE78","cq":false,"km":10876,"bearing":222,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"New Zealand","new_entity":true},{"id":44,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-3,"dt":0.1,"df":980,"mode":"~","msg":"CQ VE6NIX DO31","low":false,"sender":"VE6NIX","to":null,"grid":"DO31","cq":true,"km":1686,"bearing":22,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Canada","new_entity":false},{"id":45,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-16,"dt":0.5,"df":2280,"mode":"~","msg":"CQ 3D2USU RH82","low":false,"sender":"3D2USU","to":null,"grid":"RH82","cq":true,"km":8837,"bearing":238,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Fiji","new_entity":true},{"id":46,"tx":false,"utc":"04:19:47","tms":15587000,"snr":1,"dt":0.1,"df":1390,"mode":"~","msg":"CQ KB9XYZ EN52","low":false,"sender":"KB9XYZ","to":null,"grid":"EN52","cq":true,"km":2846,"bearing":69,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":true},{"id":47,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-20,"dt":0.2,"df":745,"mode":"~","msg":"CQ TF3ABC HP94","low":true,"sender":"TF3ABC","to":null,"grid":"HP94","cq":true,"km":6766,"bearing":29,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Iceland","new_entity":true},{"id":48,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-5,"dt":0.0,"df":2050,"mode":"~","msg":"CQ CT1FMX IM58","low":false,"sender":"CT1FMX","to":null,"grid":"IM58","cq":true,"km":9123,"bearing":47,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Portugal","new_entity":true},{"id":49,"tx":false,"utc":"04:19:47","tms":15587000,"snr":9,"dt":0.1,"df":1705,"mode":"~","msg":"CQ W1AW FN31","low":false,"sender":"W1AW","to":null,"grid":"FN31","cq":true,"km":4171,"bearing":68,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"United States","new_entity":false},{"id":50,"tx":false,"utc":"04:19:47","tms":15587000,"snr":-15,"dt":0.2,"df":880,"mode":"~","msg":"CQ PY2XYZ GG66","low":false,"sender":"PY2XYZ","to":null,"grid":"GG66","cq":true,"km":10378,"bearing":117,"worked":true,"to_me":false,"dial":14074000,"band":"20m","entity":"Brazil","new_entity":false},{"id":51,"tx":false,"utc":"04:19:47","tms":15587000,"snr":0,"dt":0.1,"df":2190,"mode":"~","msg":"CQ OH2BBB KP20","low":false,"sender":"OH2BBB","to":null,"grid":"KP20","cq":true,"km":8684,"bearing":16,"worked":false,"to_me":false,"dial":14074000,"band":"20m","entity":"Finland","new_entity":true}],"qsos":[{"call":"W1AW","grid":"FN31pr","band":"20m","mode":"FT8","date":"2026-08-17","time":"04:08","utc":"04:08:47","freq":"14.074","sent":"-09","rcvd":"-12","km":4190,"bearing":68,"entity":"United States"},{"call":"PY2XYZ","grid":"GG66rc","band":"20m","mode":"FT8","date":"2026-08-17","time":"03:57","utc":"03:57:47","freq":"14.074","sent":"-15","rcvd":"-18","km":10442,"bearing":117,"entity":"Brazil"},{"call":"VE6NIX","grid":"DO31","band":"20m","mode":"FT8","date":"2026-08-17","time":"03:46","utc":"03:46:47","freq":"14.074","sent":"+02","rcvd":"-04","km":1686,"bearing":22,"entity":"Canada"},{"call":"K5DXX","grid":"EM12","band":"40m","mode":"FT8","date":"2026-08-17","time":"03:35","utc":"03:35:47","freq":"14.074","sent":"-06","rcvd":"-08","km":2351,"bearing":97,"entity":"United States"}],"uploads":{"ok":4,"failed":0,"last":"K5DXX: uploaded"},"rig":{"ok":true,"power":true,"ptt":false,"freq":14074000,"mode":"PKTUSB","rfpower_pct":25,"strength":-14,"peak":{"po":23.4,"alc":0.11,"swr":1.2}},"psk":{"count":37,"median":-13,"best":-3,"at":"12:44","top":[{"call":"VK3ANP","snr":-3,"km":12690},{"call":"JA1XYZ","snr":-8,"km":8420},{"call":"DL9ZZZ","snr":-11,"km":9150},{"call":"LU4AA","snr":-14,"km":10240},{"call":"OH2BBB","snr":-19,"km":8480}]},"tune":{"last":0.0,"count":1,"swr":1.2,"msg":"ATU: SWR 1.2"},"bandfix":{"band":"20m","state":"done","att":70,"po":23.8,"alc":0.25,"swr":1.2},"swr_block":{"blocked":false,"swr":1.2,"at":"12:41","limit":3.0},"txcheck":{"band":"20m","po":23.8,"alc":0.25,"swr":1.2,"target":25,"att":70,"suggest":null,"reason":"within tolerance","ok":true,"at":"12:41:07"},"audio":{"tx":1620,"rx":1500,"hold":false,"auto":true,"busy":false,"note":"auto: 1620 Hz -- 0 signals nearby vs 6 at 1500"},"station":{"state":"running","steps":[],"at":null},"drive":{"att":70,"band":"20m","db":7.0,"min":0,"max":450,"stored":{"20m":70,"40m":66,"15m":110},"gui":true,"gui_reason":"demo"},"bands":{"updated":"17 Aug 2026 0419 GMT","sfi":"168","sun":"112","a":"6","k":"2","geomag":"QUIET","xray":"B7.4","muf":"24.6","sn":"S0-S1","solarwind":"412.7","bz":"1.4","protonflux":"38","electronflux":"1420","helium":"121.0","cond":{"80m-40m":{"day":"Good","night":"Fair"},"30m-20m":{"day":"Good","night":"Good"},"17m-15m":{"day":"Good","night":"Poor"},"12m-10m":{"day":"Fair","night":"Poor"}},"vhf":{"vhf-aurora":"Band Closed","E-Skip":"50MHz ES"},"recommend":{"band":"20m","rating":"Good","ok":true,"period":"day","msg":"20m is rated Good \u2014 good place to be"}},"last_decode_age":3,"entities":["Argentina","Australia","Brazil","Canada","Fiji","Finland","Germany","Greece","Iceland","Japan","New Zealand","Portugal","Spain","United States"],"me":{"call":"N0CALL","grid":"CM87ws"},"caps":{"gui":true,"gui_reason":"demo","wsjtx":true}},"log":{"qsos":[{"call":"W1AW","grid":"FN31pr","band":"20m","mode":"FT8","date":"2026-08-17","time":"04:08","utc":"04:08:47","freq":"14.074","sent":"-09","rcvd":"-12","km":4190,"bearing":68,"entity":"United States"},{"call":"PY2XYZ","grid":"GG66rc","band":"20m","mode":"FT8","date":"2026-08-17","time":"03:57","utc":"03:57:47","freq":"14.074","sent":"-15","rcvd":"-18","km":10442,"bearing":117,"entity":"Brazil"},{"call":"VE6NIX","grid":"DO31","band":"20m","mode":"FT8","date":"2026-08-17","time":"03:46","utc":"03:46:47","freq":"14.074","sent":"+02","rcvd":"-04","km":1686,"bearing":22,"entity":"Canada"},{"call":"K5DXX","grid":"EM12","band":"40m","mode":"FT8","date":"2026-08-17","time":"03:35","utc":"03:35:47","freq":"14.074","sent":"-06","rcvd":"-08","km":2351,"bearing":97,"entity":"United States"}],"total":4,"entities":[["United States",2],["Brazil",1],["Canada",1]],"bands":["20m","40m"]},"settings":{"file":"(demo)","settings":[{"key":"CALL","label":"Callsign","section":"Station","type":"text","restart":true,"secret":false,"help":"Your callsign. Must match WSJT-X.","value":"N0CALL"},{"key":"GRID","label":"Grid square","section":"Station","type":"text","restart":true,"secret":false,"help":"Maidenhead locator, 4 or 6 characters.","value":"CM87ws"},{"key":"HTTP_PORT","label":"Web port","section":"Server","type":"number","restart":true,"secret":false,"help":"Port this interface listens on.","value":"8073"},{"key":"QRZ_KEY","label":"QRZ logbook API key","section":"Logging","type":"password","restart":true,"secret":true,"help":"From logbook.qrz.com.","value":""},{"key":"AUTO_ARM","label":"Auto-arm transmit","section":"Safety","type":"bool","restart":false,"secret":false,"help":"Let the station re-enable transmit by itself. Off is strongly recommended.","value":"false"},{"key":"AUTO_FIX_DRIVE","label":"Correct drive automatically","section":"Safety","type":"bool","restart":false,"secret":false,"help":"After a transmission, if power or ALC is wrong for the band, fix the drive automatically.","value":"true"}]}};
+  const TICK = 15000;                      // one FT8 T/R period
+  let nextId = Math.max(...DEMO.snapshot.decodes.map(d => d.id)) + 1;
+
+  function stamp(d){
+    const now = new Date();
+    d.utc = now.toISOString().substr(11, 8);
+    d.tms = ((now.getUTCHours()*60 + now.getUTCMinutes())*60
+             + now.getUTCSeconds()) * 1000;
+    return d;
+  }
+
+  class DemoSocket {
+    constructor(){
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        this.onopen && this.onopen();
+        this.emit("snapshot", DEMO.snapshot);
+        this.run();
+      }, 60);
+    }
+    emit(type, data){
+      this.onmessage && this.onmessage({data: JSON.stringify({type, data})});
+    }
+    run(){
+      // a fresh batch of decodes every T/R period, drawn from the same pool
+      let n = 0;
+      setInterval(() => {
+        const pool = DEMO.snapshot.decodes;
+        const batch = 4 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < batch; i++){
+          const src = pool[(n * 5 + i * 3) % pool.length];
+          const d = stamp(Object.assign({}, src, {
+            id: nextId++,
+            snr: Math.max(-24, Math.min(12,
+                 src.snr + Math.round((Math.random() - 0.5) * 6))),
+          }));
+          this.emit("decode", d);
+        }
+        n++;
+      }, TICK);
+      // meters drift the way real ones do
+      setInterval(() => {
+        const r = JSON.parse(JSON.stringify(DEMO.snapshot.rig));
+        r.strength = -20 + Math.round(Math.random() * 12);
+        this.emit("rig", r);
+      }, 4000);
+    }
+    send(raw){
+      let act = "?";
+      try { act = (JSON.parse(raw) || {}).action || "?"; } catch(e){}
+      if (act === "beat") return;
+      this.emit("ack", {action: act, ok: false,
+                        who: "demo \u2014 no radio attached"});
+      if (window.toast) toast("Demo: no radio attached");
+    }
+    close(){ this.readyState = 3; }
+  }
+  window.WebSocket = DemoSocket;
+
+  const NOT_HERE = {ok: false, error: "not available in the demo"};
+  window.fetch = async (url) => {
+    const u = String(url);
+    let body = NOT_HERE;
+    if (u.indexOf("/api/log") === 0) body = DEMO.log;
+    else if (u.indexOf("/api/settings") === 0) body = DEMO.settings;
+    else if (u.indexOf("/api/photo/") === 0) body = {photo: null};
+    return {ok: true, status: 200, json: async () => body,
+            text: async () => JSON.stringify(body)};
+  };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const tag = document.createElement("a");
+    tag.href = "https://github.com/detournemint/ft8xss";
+    tag.textContent = "DEMO \u00b7 synthetic data \u00b7 no radio attached";
+    tag.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;"
+      + "background:#3a2d10;border:1px solid #8a6d1e;color:#f5dd9a;"
+      + "padding:7px 13px;border-radius:999px;font:600 11px/1 ui-monospace,"
+      + "monospace;letter-spacing:.06em;text-decoration:none;"
+      + "box-shadow:0 4px 14px rgba(0,0,0,.45)";
+    document.body.appendChild(tag);
+  });
+})();
+</script>
 <script>
 const $ = s => document.querySelector(s);
 let decodes = [], status = {}, sortKey = "snr";
