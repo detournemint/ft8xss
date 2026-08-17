@@ -30,7 +30,8 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
 - **Band activity** — live decodes with SNR, distance, bearing, DXCC entity and
   band; filter by CQ / new / new-DXCC / addressed-to-you; sort by signal, time
   or distance
-- **Click to call** — any decode, or Call CQ, straight from the browser
+- **Click to call** — double-click any decode, or use its call button, or
+  Call CQ, straight from the browser
 - **Current QSO thread** — the exchange as a conversation, with a warning when
   the other station keeps repeating a reply to you (they are not hearing you)
 - **Logbook** — full history with map, entity summary, sortable table, filters
@@ -199,8 +200,9 @@ than the serial port directly, so ft8xss and WSJT-X can both reach the radio.
 python3 tests/run.py
 ```
 
-Nothing but `python3` is required; `node` runs the browser-logic tests too if it
-is installed. Almost every case is a bug that reached the air — a station
+Nothing but `python3` is required. `node` adds the browser-logic tests and
+`chromium` adds the end-to-end ones, which load the real page, let it render and
+drive events at it; both skip cleanly when missing. Almost every case is a bug that reached the air — a station
 transmitting 8 W of a 25 W setting without saying so, an API key printed into a
 diagnostic report, a QSO panel that would not let go — so the test names read as
 a list of things that must not come back.

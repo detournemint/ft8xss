@@ -78,6 +78,8 @@
   .bandcol{color:#8fb8d8}
   .txmsg{color:#ffb877}
   .call-btn{padding:2px 8px;font-size:11px}
+  tr.hail{cursor:pointer}
+  tr.hail:hover td{background:rgba(255,255,255,.04)}
   .card{display:none;padding:8px 12px;border-bottom:1px solid var(--line);
         background:#141a22}
   .card.on{display:block}
@@ -727,7 +729,7 @@ function render(){
       <td></td><td></td><td></td><td></td></tr>`;
     const cls = d.to_me ? "tome" : d.cq ? "cq" : "";
     const who = d.worked ? "dupe" : "newcall";
-    return `<tr>
+    return `<tr class="hail" data-id="${d.id}" title="double-click to call ${esc(d.sender||"")}">
       <td class="muted">${d.utc}</td>
       <td class="bandcol">${d.band||""}</td>
       <td class="${d.snr>=-10?"snr-hi":"snr-lo"}">${d.snr>0?"+":""}${d.snr}</td>
@@ -747,6 +749,17 @@ function render(){
 $("#rows").addEventListener("click", e => {
   const b = e.target.closest("button[data-id]"); if (!b) return;
   ws.send(JSON.stringify({action:"call", id:+b.dataset.id}));
+});
+// Double-click anywhere on a row calls that station, the way WSJT-X does it.
+// The button stays: it is the discoverable version, and the only one that works
+// on a touchscreen.
+$("#rows").addEventListener("dblclick", e => {
+  if (e.target.closest("button")) return;      // the click handler has it
+  if (e.target.closest("a")) return;           // callsign links go to QRZ
+  const tr = e.target.closest("tr.hail[data-id]");
+  if (!tr) return;                             // our own TX rows are not hailable
+  window.getSelection && window.getSelection().removeAllRanges();
+  ws.send(JSON.stringify({action:"call", id:+tr.dataset.id}));
 });
 $("#halt").onclick = () => ws.send(JSON.stringify({action:"halt"}));
 $("#cq").onclick = () => ws.send(JSON.stringify({action:"cq"}));

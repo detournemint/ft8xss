@@ -77,13 +77,27 @@ def decode(idx, snr, dt, df, msg, when):
 
 
 def build_decodes():
-    """Three T/R cycles of traffic, oldest first."""
+    """Three T/R cycles of traffic, oldest first, with one of our own overs."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
     out, idx = [], 1
     for cycle in range(3):
         when = now - timedelta(seconds=15 * (2 - cycle))
         for snr, dt, df, msg in TRAFFIC:
             out.append(decode(idx, snr + (cycle - 1), dt, df, msg, when))
+            idx += 1
+        if cycle == 1:
+            # our own transmission, shown as a TX row and never callable
+            t = when + timedelta(seconds=7)
+            out.append({
+                "id": idx, "tx": True, "utc": t.strftime("%H:%M:%S"),
+                "tms": ((t.hour * 60 + t.minute) * 60 + t.second) * 1000,
+                "snr": 0, "dt": 0.0, "df": 1620, "mode": "~",
+                "msg": f"EA5TT {HOME_CALL} -09", "low": False,
+                "sender": HOME_CALL, "to": "EA5TT", "grid": "", "cq": False,
+                "km": None, "bearing": None, "worked": False, "to_me": False,
+                "dial": DIAL, "band": server.band_of(DIAL),
+                "entity": None, "new_entity": False,
+            })
             idx += 1
     return out
 

@@ -61,6 +61,7 @@ def main():
         ("python", run("python", [sys.executable, "tests/test_server.py"])),
         ("browser logic", run("browser logic", ["node", "tests/test_ui.mjs"],
                               optional=not shutil.which("node"))),
+        ("interface", run("interface", [sys.executable, "tests/test_browser.py"])),
         ("page scripts", check_page_scripts()),
     ]
     print()
