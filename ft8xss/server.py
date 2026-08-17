@@ -19,7 +19,8 @@ from pathlib import Path
 from aiohttp import web, ClientSession
 
 import dxcc
-from bandsetup import BandSetup, load_drive as bs_load_drive
+import gui
+from bandsetup import BandSetup
 
 MAGIC = 0xADBCCBDA
 def _env(name, default=""):
@@ -542,6 +543,7 @@ async def ws_handler(req):
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
         "entities": sorted(ST.worked_entities),
         "me": {"call": MY_CALL, "grid": MY_GRID},
+        "caps": {"gui": gui.available(), "gui_reason": gui.reason()},
     }}))
     try:
         async for m in ws:
@@ -578,14 +580,6 @@ async def ws_handler(req):
                 ok = await run_tuner(cur, manual=True)
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "tune", "ok": ok, "who": "ATU"}}))
-            elif act == "click":
-                try:
-                    dx, dy = int(req_msg.get("x")), int(req_msg.get("y"))
-                except (TypeError, ValueError):
-                    dx = dy = None
-                ok = await click_at(dx, dy) if dx is not None else False
-                await ws.send_str(json.dumps({"type": "ack", "data": {
-                    "action": "click", "ok": ok, "who": req_msg.get("label", "control")}}))
             elif act == "armtx":
                 ok = await arm_tx()
                 await ws.send_str(json.dumps({"type": "ack", "data": {
@@ -632,6 +626,7 @@ async def api_state(req):
         "rig": ST.rig, "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
+        "caps": {"gui": gui.available(), "gui_reason": gui.reason()},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
     })
 
@@ -927,23 +922,17 @@ def set_split_mode(mode="fake"):
 async def restart_wsjtx_with(att):
     """Set the Pwr attenuation and restart WSJT-X so it takes effect."""
     ini = Path.home() / ".config/WSJT-X.ini"
-    pr = await asyncio.create_subprocess_exec(
-        "systemctl", "--user", "stop", WSJTX_UNIT,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-    await pr.wait()
-    await asyncio.sleep(1.5)
-    try:
-        txt = ini.read_text(errors="ignore")
-        txt = re.sub(r"^OutAttenuation=.*$", f"OutAttenuation={att}", txt, flags=re.M)
-        ini.write_text(txt)
-    except OSError:
-        pass
-    pr = await asyncio.create_subprocess_exec(
-        "systemctl", "--user", "start", WSJTX_UNIT,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-    await pr.wait()
-    # wait for it to come back AND start reporting status packets again
+
+    def rewrite():
+        try:
+            txt = ini.read_text(errors="ignore")
+            ini.write_text(re.sub(r"^OutAttenuation=.*$",
+                                  f"OutAttenuation={att}", txt, flags=re.M))
+        except OSError:
+            pass
+
     ST.status = {}
+    await gui.restart_wsjtx(prepare=rewrite)
     for _ in range(60):
         await asyncio.sleep(0.5)
         if ST.status.get("dial") and ST.status.get("tx_enabled") is not None:
@@ -973,9 +962,17 @@ async def _cq_once():
 
 
 async def band_setup(band):
-    """Tune if needed, then find the drive that gives full power with clean ALC."""
+    """Tune if needed, then find the drive that gives full power with clean ALC.
+
+    Needs GUI automation: measuring means transmitting, and changing the Pwr
+    slider means restarting WSJT-X.
+    """
     if ST.busy_band:
         return None
+    if not gui.available():
+        ST.bandfix = {"band": band, "state": "unavailable", "err": gui.reason()}
+        await ST.broadcast("bandfix", ST.bandfix)
+        return ST.bandfix
     ST.busy_band = True
     ST.bandfix = {"band": band, "state": "running"}
     await ST.broadcast("bandfix", ST.bandfix)
@@ -1163,68 +1160,20 @@ async def bands_poll():
         await asyncio.sleep(900)
 
 
-async def xdo(*args):
-    env = {**os.environ, "DISPLAY": XDOTOOL_DISPLAY}
-    pr = await asyncio.create_subprocess_exec(
-        "xdotool", *args, env=env, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL)
-    out, _ = await pr.communicate()
-    return out.decode(errors="replace").strip()
-
-
-async def client_origin():
-    """Absolute screen position of WSJT-X's client area.
-
-    xdotool reports the *frame* origin; with a window manager running that is
-    offset by the title bar, so clicks land ~20px high. xwininfo's
-    'Absolute upper-left' is the client area and is what we need.
-    """
-    wid = (await xdo("search", "--name", WSJTX_WINDOW)).splitlines()
-    if not wid:
-        return None
-    pr = await asyncio.create_subprocess_exec(
-        "xwininfo", "-id", wid[0],
-        env={**os.environ, "DISPLAY": XDOTOOL_DISPLAY},
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    out, _ = await pr.communicate()
-    txt = out.decode(errors="replace")
-    mx = re.search(r"Absolute upper-left X:\s+(-?\d+)", txt)
-    my = re.search(r"Absolute upper-left Y:\s+(-?\d+)", txt)
-    if not (mx and my):
-        return None
-    return int(mx.group(1)), int(my.group(1))
+async def set_tx(want, tries=3):
+    """Enable/disable transmit. Needs GUI automation -- WSJT-X does not expose
+    Enable Tx over UDP. Without it the operator does this in the GUI."""
+    if not gui.available():
+        return False
+    return await gui.set_tx(want, lambda: ST.status.get("tx_enabled"), tries)
 
 
 async def click_at(dx, dy):
-    """Click at an offset inside WSJT-X's client area."""
-    origin = await client_origin()
-    if not origin:
-        return False
-    await xdo("mousemove", "--sync", str(origin[0] + dx), str(origin[1] + dy))
-    await asyncio.sleep(0.2)
-    await xdo("click", "1")
-    await asyncio.sleep(0.6)
-    return True
+    return await gui.click_at(dx, dy) if gui.available() else False
 
 
-async def set_tx(want, tries=3):
-    """Alt+N toggles Enable Tx, so verify state rather than blind-toggling."""
-    for _ in range(tries):
-        cur = ST.status.get("tx_enabled")
-        if cur is want:
-            return True
-        wid = (await xdo("search", "--name", WSJTX_WINDOW)).splitlines()
-        if not wid:
-            return False
-        await xdo("windowfocus", "--sync", wid[0])
-        await asyncio.sleep(0.3)
-        await xdo("key", "--clearmodifiers", "alt+n")
-        # wait for WSJT-X to report the new state
-        for _ in range(12):
-            await asyncio.sleep(0.25)
-            if ST.status.get("tx_enabled") is want:
-                return True
-    return ST.status.get("tx_enabled") is want
+async def arm_tx():
+    return await set_tx(True)
 
 
 async def full_stop():
@@ -1232,15 +1181,19 @@ async def full_stop():
     disable Enable Tx so nothing transmits again until explicitly asked."""
     PROTO.send_halt_tx(auto=True)          # stop TX and auto-sequencing
     await asyncio.sleep(0.4)
-    off = await set_tx(False)
+    # Disabling Enable Tx needs the GUI. Without it we can still halt the
+    # transmission and drop PTT, but WSJT-X may transmit again on its own.
+    off = await set_tx(False) if gui.available() else False
     # belt and braces: make sure PTT is actually down
     if (await rig_cmd("t")) == "1":
         await rig_cmd("T 0")
-    ST.txfix = {"state": "halted", "tx_enabled": ST.status.get("tx_enabled")}
+    ST.txfix = {"state": "halted", "tx_enabled": ST.status.get("tx_enabled"),
+                "full": bool(gui.available())}
     await ST.broadcast("txfix", ST.txfix)
     print(f"[halt] full stop; tx_enabled now "
           f"{ST.status.get('tx_enabled')} (set_tx ok={off})", flush=True)
-    return off
+    # without GUI automation, halting the transmission is still a success
+    return True if not gui.available() else off
 
 
 async def arm_tx():
@@ -1351,6 +1304,9 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, BIND_ADDR, HTTP_PORT).start()
+    print(f"[gui] automation: "
+          f"{'available -- ' if gui.available() else 'unavailable -- '}{gui.reason()}",
+          flush=True)
     if not MY_CALL or not MY_GRID:
         print("[config] FT8XSS_CALL and FT8XSS_GRID are required "
               "(set them in ~/.config/ft8xss.env)", flush=True)

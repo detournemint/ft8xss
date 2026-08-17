@@ -241,8 +241,6 @@
       <button id="s-km">Sort: distance</button>
       <button id="clear">Clear</button>
       <button id="cq" class="go">Call CQ</button>
-      <button id="autocq">Auto CQ</button>
-      <button id="autocall">Auto Call</button>
       <button id="halt" class="danger">STOP</button>
     </div>
     <div class="scroll">
@@ -299,6 +297,7 @@
       <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
       <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
       <div style="padding:6px 12px;display:flex;gap:6px"><button id="tunebtn">Run tuner</button><button id="bandbtn">Setup band</button></div>
+      <div id="gui-note" class="advice warn" style="display:none"></div>
       <div id="r-advice" class="advice"></div>
     </section>
     <section class="panel">
@@ -380,6 +379,7 @@ function connect(){
       $("#me").textContent = data.me.call; $("#grid").textContent = data.me.grid;
       setUploads(data.uploads); setRig(data.rig); setPsk(data.psk);
       setBands(data.bands); setTune(data.tune); setBandfix(data.bandfix);
+      applyCaps(data.caps);
       workedEntities = data.entities || workedEntities;
       if (data.last_decode_age != null) lastDecodeAt = Date.now() - data.last_decode_age*1000;
       (data.qsos||[]).forEach(addQso);
@@ -411,6 +411,26 @@ function connect(){
   };
 }
 connect();
+
+/* ---------- capabilities ---------- */
+let caps = {gui:false, gui_reason:""};
+function applyCaps(c){
+  if (!c) return;
+  caps = c;
+  const needGui = ["#armtx", "#bandbtn"];
+  needGui.forEach(sel => {
+    const el = $(sel); if (!el) return;
+    el.disabled = !caps.gui;
+    el.title = caps.gui ? "" :
+      `unavailable: ${caps.gui_reason}. Do this in the WSJT-X window.`;
+  });
+  const note = $("#gui-note");
+  if (note){
+    note.textContent = caps.gui ? "" :
+      "TX enable and band setup must be done in WSJT-X (" + caps.gui_reason + ")";
+    note.style.display = caps.gui ? "none" : "";
+  }
+}
 
 /* ---------- dead-man heartbeat ----------
    If this browser stops responding while the station is armed, the server
@@ -508,11 +528,7 @@ $("#rows").addEventListener("click", e => {
 $("#halt").onclick = () => ws.send(JSON.stringify({action:"halt"}));
 $("#cq").onclick = () => ws.send(JSON.stringify({action:"cq"}));
 $("#armtx").onclick = () => ws.send(JSON.stringify({action:"armtx"}));
-// WSJT-Z checkbox offsets inside its client area (no keyboard accelerators)
-$("#autocq").onclick   = () => ws.send(JSON.stringify(
-  {action:"click", x:34,  y:414, label:"Auto CQ"}));
-$("#autocall").onclick = () => ws.send(JSON.stringify(
-  {action:"click", x:153, y:414, label:"Auto Call"}));
+
 $("#bandsel").onchange = e => {
   const hz = +e.target.value; if (!hz) return;
   const sel = e.target; sel.dataset.busy = "1"; sel.disabled = true;
@@ -901,8 +917,11 @@ function updateWarn(){
   } else { txOffSince = null; }
   const offFor = txOffSince ? (Date.now() - txOffSince)/1000 : 0;
   if (txOffSince && offFor > 30){
-    bar.className = "warnbar on"; $("#armtx").style.display = "";
-    t.textContent = `TX has been disabled for ${Math.round(offFor)}s — auto-recovery failed`;
+    bar.className = "warnbar on";
+    $("#armtx").style.display = caps.gui ? "" : "none";
+    t.textContent = caps.gui
+      ? `TX has been disabled for ${Math.round(offFor)}s — auto-recovery failed`
+      : `TX is disabled — enable it in the WSJT-X window`;
   } else if (age > 45){
     bar.className = "warnbar on crit"; $("#armtx").style.display = "none";
     t.textContent = `No decodes for ${Math.round(age)}s — check radio, audio, or USB`;
