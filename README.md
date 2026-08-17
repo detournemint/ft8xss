@@ -193,6 +193,21 @@ else has it, and ft8xss will then see nothing.
 **Point WSJT-X at `rigctld`** ("Hamlib NET rigctl", `127.0.0.1:4532`) rather
 than the serial port directly, so ft8xss and WSJT-X can both reach the radio.
 
+## Tests
+
+```sh
+python3 tests/run.py
+```
+
+Nothing but `python3` is required; `node` runs the browser-logic tests too if it
+is installed. Almost every case is a bug that reached the air — a station
+transmitting 8 W of a 25 W setting without saying so, an API key printed into a
+diagnostic report, a QSO panel that would not let go — so the test names read as
+a list of things that must not come back.
+
+The browser tests lift the functions out of the shipped `index.html` by name and
+run those, rather than a copy that can quietly drift.
+
 ## Credits
 
 Built on the work of others:

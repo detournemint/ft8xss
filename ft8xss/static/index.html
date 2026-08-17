@@ -584,6 +584,12 @@ function connect(){
       if (data.action === "cq") toast(data.ok ? `calling ${data.who}` : "CQ failed — no WSJT-X link", !data.ok);
       if (data.action === "power") toast(data.ok ? data.who : "power command failed", !data.ok);
       if (data.action === "bandsetup") toast(data.ok ? `band setup running on ${data.who}` : "no band known", !data.ok);
+      if (data.action === "setdrive"){ $("#chk-fix").disabled = false;
+        toast(data.who || (data.ok ? "drive set" : "drive change refused"), !data.ok); }
+      if (data.action === "preflight") toast(data.who, !data.ok);
+      if (data.action === "swrclear") toast(data.who, !data.ok);
+      if (data.action === "station") toast(data.ok ? "station on the air"
+                                                  : "station did not come up", !data.ok);
       if (data.action === "tune") toast(data.ok ? "tuner run" : "tune failed / skipped", !data.ok);
       if (data.action === "click") toast(data.ok ? `toggled ${data.who}` : `could not reach ${data.who}`, !data.ok);
       if (data.action === "armtx") toast(data.ok ? "TX enabled" : "could not reach the WSJT-X window", !data.ok);
@@ -776,14 +782,24 @@ function setCard(c){
 let workedEntities = [];
 
 // Age of a decode in seconds, from its ms-since-UTC-midnight stamp.
-function ageOf(d){
+function ageOf(d, now){
   if (!d || d.tms == null) return 1e9;
-  let a = (Date.now() % 86400000) - d.tms;
+  let a = ((now === undefined ? Date.now() : now) % 86400000) - d.tms;
   if (a < -3600000) a += 86400000;        // it landed before UTC midnight
   return a / 1000;
 }
 const QSO_IDLE = 180;      // no traffic with them for this long: it is over
 let lastDxSeen = null, dxSince = 0;
+
+/* Is there really a QSO in progress with `dx`?
+   `exchange` is traffic between us and them only, newest last. `since` is when
+   we selected them (0 if they were already there when we arrived). */
+function qsoActive(dx, exchange, since, now){
+  if (!dx) return false;
+  const last = exchange[exchange.length - 1];
+  if (last && ageOf(last, now) < QSO_IDLE) return true;
+  return !!since && (now - since) < QSO_IDLE * 1000;
+}
 
 function renderThread(){
   const dxRaw = (status.dx_call||"").toUpperCase();
@@ -793,20 +809,25 @@ function renderThread(){
   // text box, not a statement that a contact is in progress. Treat a QSO as
   // current only while there is traffic with that station, or while we have
   // just selected them and are waiting for a first reply.
+  // shown in the thread: anything involving them
   const turns = !dxRaw ? [] : decodes.filter(d =>
       (d.tx && (d.to||"").toUpperCase() === dxRaw) ||
       (!d.tx && ((d.sender||"").toUpperCase() === dxRaw ||
                  (d.to||"").toUpperCase() === dxRaw))
     ).slice().sort((a,b)=>a.id-b.id).slice(-14);
 
+  // counts as a live QSO: only traffic between us. A station calling CQ to the
+  // world is not in a contact with us, and treating their activity as ours kept
+  // a finished QSO on screen for as long as they stayed on the band.
+  const exchange = turns.filter(d =>
+      (d.tx && (d.to||"").toUpperCase() === dxRaw) || (!d.tx && d.to_me));
+
   if (dxRaw !== lastDxSeen){
     // the first value we ever see is pre-existing, so it does not count as new
     dxSince = lastDxSeen === null ? 0 : Date.now();
     lastDxSeen = dxRaw;
   }
-  const active = !!dxRaw && (
-      (turns.length && ageOf(turns[turns.length-1]) < QSO_IDLE) ||
-      (dxSince && (Date.now() - dxSince) < QSO_IDLE * 1000));
+  const active = qsoActive(dxRaw, exchange, dxSince, Date.now());
   const dx = active ? dxRaw : "";
 
   if (!dx){
@@ -1027,15 +1048,27 @@ function setCheck(c){
       : `${c.band}: ${c.reason}`,
       c.reason && c.reason.indexOf("ALC") === 0 ? "alc-high" : "power-low");
     // only offer the button when nothing was applied for us
-    $("#chk-fix").style.display =
-      (c.applied || c.applying) ? "none" : "inline-block";
+    const fx = $("#chk-fix");
+    fx.style.display = (c.applied || c.applying) ? "none" : "inline-block";
+    fx.disabled = false;
+    fx.textContent = c.suggest == null ? "Setup band"
+      : `Fix drive (\u2212${(c.att/10).toFixed(1)} \u2192 \u2212${(c.suggest/10).toFixed(1)} dB)`;
     bar.className = "chkbar on";
   }
   $("#chk-meta").textContent = c.at ? c.at + "Z" : "";
   measureChrome();
 }
-$("#chk-fix").onclick = () => { ws.send(JSON.stringify({action:"bandsetup"}));
-                                toast("running band setup"); };
+// The check has already worked out the correction and is showing it. Apply
+// that, rather than starting a four-transmission calibration to rediscover it:
+// setting the drive edits WSJT-X's config and restarts it, and puts nothing on
+// the air. Band setup remains available as its own button.
+$("#chk-fix").onclick = () => {
+  const att = lastCheck && lastCheck.suggest;
+  if (att == null){ ws.send(JSON.stringify({action:"bandsetup"}));
+                    toast("no correction to apply — running band setup"); return; }
+  $("#chk-fix").disabled = true;
+  ws.send(JSON.stringify({action:"setdrive", att}));
+};
 
 /* ---- station power ----------------------------------------------------- */
 function setStation(st){

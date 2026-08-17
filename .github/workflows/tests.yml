@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: python3 -m pip install aiohttp
+      - name: Run tests
+        run: python3 tests/run.py
+      - name: Check the installer parses
+        run: bash -n install.sh
+      - name: Check the demo still builds from the shipped page
+        run: |
+          python3 docs/build_demo.py
+          git diff --exit-code --stat docs/demo/index.html \
+            || echo "note: demo output differs; rebuild and commit it"

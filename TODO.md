@@ -4,6 +4,10 @@ Ideas credited to the projects they came from — see README for links.
 
 ## Before first release
 
+- [x] **Tests.** `tests/run.py` — server logic, browser logic, and a syntax
+      check on the shipped page. Verified by mutation: reintroducing four past
+      bugs makes them fail.
+
 - [x] **Live demo on GitHub Pages.** `docs/build_demo.py` regenerates
       `docs/demo/` from the real `static/index.html`, so the demo cannot drift
       from the product. Re-run it whenever the interface changes.

@@ -153,12 +153,19 @@ BAND_PLAN = [
 
 
 def band_of(hz):
+    """The amateur band a frequency falls in, or "" if it is not in one.
+
+    This is an identity, not a label: it keys the per-band drive calibration and
+    the set of bands already checked. Returning a formatted frequency for
+    anything out of plan meant an off-band dial invented a band called "0.012"
+    and let a calibration run against it.
+    """
     if not hz:
         return ""
     for lo, hi, label in BAND_PLAN:
         if lo <= hz <= hi:
             return label
-    return f"{hz / 1e6:.3f}"
+    return ""
 
 CALL_RE = re.compile(r"^[A-Z0-9]{1,3}\d[A-Z0-9]*[A-Z](/[A-Z0-9]+)?$")
 _GRID_RE = re.compile(r"^[A-R]{2}\d{2}$")
@@ -453,16 +460,8 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
         # which is not valid ADIF -- keep the first one and drop the rest.
         try:
             new_file = not LOG_ADIF.exists() or LOG_ADIF.stat().st_size == 0
-            body = adif.strip()
-            cut = body.upper().find("<EOH>")
-            if cut >= 0:
-                head, body = body[:cut + 5], body[cut + 5:].strip()
-            else:
-                head = ""
             with LOG_ADIF.open("a") as fh:
-                if new_file and head:
-                    fh.write(head + "\n")
-                fh.write(body + "\n")
+                fh.write(adif_append(adif, header=new_file))
         except OSError:
             pass
         asyncio.create_task(ST.broadcast("qso", rec))
@@ -2122,6 +2121,20 @@ async def full_stop():
     # without GUI automation, halting the transmission is still a success
     return True if not gui.available() else off
 
+
+
+def adif_append(adif, header):
+    """What to append to the log for one QSO.
+
+    WSJT-X sends a complete ADIF document per logged QSO, header and all, so
+    appending it verbatim gives a file with a header before every record --
+    which is not valid ADIF. Keep the header only when starting a new file.
+    """
+    body = (adif or "").strip()
+    cut = body.upper().find("<EOH>")
+    head, body = (body[:cut + 5], body[cut + 5:].strip()) if cut >= 0 else ("", body)
+    out = (head + "\n") if (header and head) else ""
+    return out + body + "\n" if body else out
 
 
 ADIF_FIELD = re.compile(r"<([A-Za-z_0-9]+):(\d+)(?::[A-Za-z])?>")
