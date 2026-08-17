@@ -1633,6 +1633,32 @@ def clear_session(why=""):
     diag.log(f"[station] session cleared ({why})")
 
 
+async def probe_station_state():
+    """Work out whether the station is up, rather than assuming it.
+
+    ST.station starts as "running" because that is true of most starts, but a
+    restart after a shutdown would otherwise claim a station that is switched
+    off is on the air -- no decodes, no meters, and no QRT card to explain why.
+    Ask systemd what is actually running.
+    """
+    unit = _env("WSJTX_UNIT", "wsjtx.service")
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "is-active", unit,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await pr.communicate()
+        active = (out or b"").decode().strip() == "active"
+    except Exception:
+        return                              # no systemd: leave the default
+    if active:
+        return
+    diag.log(f"[station] {unit} is not running -- station is idle")
+    clear_session("station was already down at startup")
+    ST.station = {"state": "idle", "at": None,
+                  "steps": [f"{unit} was not running when ft8xss started"]}
+    await ST.broadcast("station", ST.station)
+
+
 async def station_shutdown():
     """Put the station to bed without stopping this server.
 
@@ -1972,6 +1998,7 @@ async def main():
     asyncio.create_task(psk_poll())
     asyncio.create_task(bands_poll())
     asyncio.create_task(seed_from_qrz())
+    asyncio.create_task(probe_station_state())
     asyncio.create_task(recover_interrupted_setup())
     asyncio.create_task(tx_watchdog())
     asyncio.create_task(deadman())
