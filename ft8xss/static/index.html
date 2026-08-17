@@ -928,7 +928,7 @@ function setBandfix(b){
 }
 
 /* ---------- layout: collapsible panels, draggable gutter, auto-fit ---------- */
-const LS = { get k(){ return "ft8web.layout"; },
+const LS = { get k(){ return "ft8xss.layout"; },
   load(){ try { return JSON.parse(localStorage.getItem(this.k)) || {}; } catch(e){ return {}; } },
   save(o){ try { localStorage.setItem(this.k, JSON.stringify(o)); } catch(e){} } };
 let layout = LS.load();

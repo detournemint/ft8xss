@@ -132,7 +132,7 @@ def bundle(state_fn=None, extra=None):
 
     w("-- configuration (redacted) --\n")
     for k, v in sorted(os.environ.items()):
-        if k.startswith(("FT8XSS_", "FT8WEB_")):
+        if k.startswith("FT8XSS_"):
             shown = "<SET>" if "KEY" in k or "PASS" in k else v
             w(f"{k}={shown}\n")
     w("\n")

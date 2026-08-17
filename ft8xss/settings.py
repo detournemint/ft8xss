@@ -59,8 +59,7 @@ BOOLS = {"1": True, "true": True, "yes": True, "on": True}
 
 
 def _get(key, default=""):
-    return os.environ.get(f"FT8XSS_{key}",
-                          os.environ.get(f"FT8WEB_{key}", default))
+    return os.environ.get(f"FT8XSS_{key}", default)
 
 
 def current(reveal_secrets=False):
@@ -120,8 +119,6 @@ def save(updates):
         if existing.get(name) != val:
             restart_needed = restart_needed or restart
         existing[name] = val
-        # a stale FT8WEB_ entry would win the fallback, so drop it
-        existing.pop(f"FT8WEB_{key}", None)
         written.append(key)
         # apply immediately for settings that do not need a restart
         if not restart:

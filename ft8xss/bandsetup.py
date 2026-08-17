@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 INI = Path.home() / ".config/WSJT-X.ini"
-DRIVE_FILE = Path.home() / ".config/ft8web-drive.json"
+DRIVE_FILE = Path.home() / ".config/ft8xss-drive.json"
 
 # what "good" looks like
 ALC_MAX = 0.30           # above this we are compressing

@@ -22,7 +22,7 @@ FAIL_TTL = 10.0      # retry a failure quickly: the window may still be starting
 
 
 def _env(name, default=""):
-    return os.environ.get(f"FT8XSS_{name}", os.environ.get(f"FT8WEB_{name}", default))
+    return os.environ.get(f"FT8XSS_{name}", default)
 
 
 DISPLAY = _env("DISPLAY_NUM", ":99")

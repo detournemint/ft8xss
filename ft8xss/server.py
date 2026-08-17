@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ft8web - browser front end for a headless WSJT-X / WSJT-X station.
+"""ft8xss - browser front end for WSJT-X.
 
 Binds the WSJT-X UDP port, decodes the Qt DataStream protocol, and serves a
 live web UI over WebSocket. Supports click-to-call (Reply packets) and
@@ -32,9 +32,8 @@ from bandsetup import BandSetup
 
 MAGIC = 0xADBCCBDA
 def _env(name, default=""):
-    """Read FT8XSS_<NAME>, falling back to the older FT8WEB_ prefix."""
-    return os.environ.get(f"FT8XSS_{name}",
-                          os.environ.get(f"FT8WEB_{name}", default))
+    """Read FT8XSS_<NAME> from the environment."""
+    return os.environ.get(f"FT8XSS_{name}", default)
 
 
 UDP_PORT = int(_env("UDP_PORT", "2237"))
@@ -450,9 +449,21 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
             if e:
                 ST.worked_entities.add(e)
                 rec["entity"] = e
+        # WSJT-X sends a complete ADIF document per QSO, header and all.
+        # Appending it verbatim gives a file with a header before every record,
+        # which is not valid ADIF -- keep the first one and drop the rest.
         try:
+            new_file = not LOG_ADIF.exists() or LOG_ADIF.stat().st_size == 0
+            body = adif.strip()
+            cut = body.upper().find("<EOH>")
+            if cut >= 0:
+                head, body = body[:cut + 5], body[cut + 5:].strip()
+            else:
+                head = ""
             with LOG_ADIF.open("a") as fh:
-                fh.write(adif.strip() + "\n")
+                if new_file and head:
+                    fh.write(head + "\n")
+                fh.write(body + "\n")
         except OSError:
             pass
         asyncio.create_task(ST.broadcast("qso", rec))
@@ -988,26 +999,6 @@ async def seed_from_qrz():
         await ST.broadcast("entities", sorted(ST.worked_entities))
     except Exception as e:
         diag.log(f"[qrz] seed failed: {type(e).__name__}: {e}")
-
-
-# Calibrated Pwr-slider attenuation per band (tenths of a dB), measured with
-# calibrate.py: target is full power with ALC barely moving.
-BAND_DRIVE = {"20m": 90, "15m": 105}
-DRIVE_FILE = Path.home() / ".config/ft8web-drive.json"
-
-
-def load_drive():
-    try:
-        BAND_DRIVE.update(json.loads(DRIVE_FILE.read_text()))
-    except Exception:
-        pass
-
-
-def save_drive():
-    try:
-        DRIVE_FILE.write_text(json.dumps(BAND_DRIVE, indent=1))
-    except OSError:
-        pass
 
 
 # NOTE: WSJT-X's "Fake It" split (SplitMode=split_mode_emulate) is deliberately
