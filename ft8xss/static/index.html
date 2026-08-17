@@ -458,7 +458,7 @@ function connect(){
       if (data.action === "bandsetup") toast(data.ok ? `band setup running on ${data.who}` : "no band known", !data.ok);
       if (data.action === "tune") toast(data.ok ? "tuner run" : "tune failed / skipped", !data.ok);
       if (data.action === "click") toast(data.ok ? `toggled ${data.who}` : `could not reach ${data.who}`, !data.ok);
-      if (data.action === "armtx") toast(data.ok ? "TX enabled" : "could not reach WSJT-Z window", !data.ok);
+      if (data.action === "armtx") toast(data.ok ? "TX enabled" : "could not reach the WSJT-X window", !data.ok);
       if (data.action === "setfreq") toast(data.ok ? `QSY ${data.who} MHz` : `QSY to ${data.who} failed`, !data.ok);
     }
   };
@@ -1058,7 +1058,7 @@ let txOffSince = null;
 function updateWarn(){
   const bar = $("#warnbar"), t = $("#warn-text");
   const age = (Date.now() - lastDecodeAt)/1000;
-  // debounce: WSJT-Z restarts leave TX briefly off while the auto-arm runs,
+  // debounce: WSJT-X restarts leave TX briefly off while arming runs,
   // and the server watchdog re-arms it. Only warn if it stays off.
   if (status.tx_enabled === false){
     if (txOffSince === null) txOffSince = Date.now();

@@ -12,9 +12,13 @@ import asyncio
 import os
 import re
 import shutil
+import time
 
 _checked = None
 _reason = "not checked"
+_checked_at = 0.0
+OK_TTL = 60.0        # re-probe a working setup occasionally
+FAIL_TTL = 10.0      # retry a failure quickly: the window may still be starting
 
 
 def _env(name, default=""):
@@ -32,35 +36,43 @@ def reason():
 
 
 def available():
-    """True if we can actually drive a WSJT-X window on this display."""
-    global _checked, _reason
+    """True if we can actually drive a WSJT-X window on this display.
+
+    Cached with a TTL. A failure must not stick: WSJT-X may simply have been
+    restarting when we looked, and a permanently cached False would leave the
+    station without transmit control until the service was restarted.
+    """
+    global _checked, _reason, _checked_at
     if _checked is not None:
-        return _checked
+        age = time.time() - _checked_at
+        if age < (OK_TTL if _checked else FAIL_TTL):
+            return _checked
     if _env("NO_GUI") == "1":
-        _checked, _reason = False, "disabled by FT8XSS_NO_GUI"
+        _checked, _reason, _checked_at = False, "disabled by FT8XSS_NO_GUI", time.time()
         return False
     for tool in ("xdotool", "xwininfo"):
         if not shutil.which(tool):
-            _checked, _reason = False, f"{tool} not installed"
+            _checked, _reason, _checked_at = False, f"{tool} not installed", time.time()
             return False
     try:
         import subprocess
         out = subprocess.run(["xdotool", "search", "--name", WINDOW],
                              env=ENV, capture_output=True, timeout=5)
         if out.returncode != 0 or not out.stdout.strip():
-            _checked, _reason = False, f"no window matching {WINDOW!r} on {DISPLAY}"
+            _checked, _reason, _checked_at = (
+                False, f"no window matching {WINDOW!r} on {DISPLAY}", time.time())
             return False
     except Exception as e:
-        _checked, _reason = False, f"{type(e).__name__}"
+        _checked, _reason, _checked_at = False, f"{type(e).__name__}", time.time()
         return False
-    _checked, _reason = True, f"driving {WINDOW!r} on {DISPLAY}"
+    _checked, _reason, _checked_at = True, f"driving {WINDOW!r} on {DISPLAY}", time.time()
     return True
 
 
 def invalidate():
     """Force re-detection, e.g. after WSJT-X restarts."""
-    global _checked
-    _checked = None
+    global _checked, _checked_at
+    _checked, _checked_at = None, 0.0
 
 
 async def _run(*args):
@@ -75,9 +87,36 @@ async def xdo(*args):
     return await _run("xdotool", *args)
 
 
+# auxiliary windows WSJT-X creates that are never the main window
+AUX = ("wide graph", "selection owner", "log qso", "astro", "echo",
+       "fast graph", "message", "colou", "band activity")
+
+
 async def window_id():
-    ids = (await xdo("search", "--name", WINDOW)).splitlines()
-    return ids[0] if ids else None
+    """The main WSJT-X window.
+
+    Matching on the title alone is not enough: "WSJT-X" also matches
+    "WSJT-X - Wide Graph" and a 1x1 helper window, and picking the wrong one
+    means keystrokes go nowhere. Filter the known auxiliaries, then take the
+    largest remaining window.
+    """
+    ids = [i for i in (await xdo("search", "--name", WINDOW)).splitlines() if i.strip()]
+    if not ids:
+        return None
+    best, best_area = None, -1
+    for wid in ids:
+        name = (await xdo("getwindowname", wid)).lower()
+        if any(a in name for a in AUX):
+            continue
+        geo = await xdo("getwindowgeometry", "--shell", wid)
+        g = dict(re.findall(r"^(\w+)=(-?\d+)$", geo, re.M))
+        try:
+            area = int(g.get("WIDTH", 0)) * int(g.get("HEIGHT", 0))
+        except ValueError:
+            area = 0
+        if area > best_area:
+            best, best_area = wid, area
+    return best or ids[0]
 
 
 async def client_origin():
