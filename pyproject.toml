@@ -1,0 +1,21 @@
+[project]
+name = "ft8xss"
+version = "0.1.0"
+description = "Browser front end for WSJT-X: live decodes, click-to-call, logging, rig telemetry"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["aiohttp>=3.9"]
+keywords = ["ham-radio", "amateur-radio", "ft8", "wsjt-x", "hamlib"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3",
+  "Topic :: Communications :: Ham Radio",
+]
+
+[project.scripts]
+ft8xss = "ft8xss.server:main_cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

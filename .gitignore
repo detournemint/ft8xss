@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+# never commit operator config or credentials
+ft8xss.toml
+*.env
+*.adif
+*.adi

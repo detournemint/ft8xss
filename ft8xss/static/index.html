@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K6XSS FT8</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e6e9ee; --dim:#8b95a3;
+    --cq:#f0a02c; --me:#2ee06a; --new:#4aa3ff; --warn:#ff5d5d; --ok:#2ee06a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+         padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .pill{padding:3px 9px;border:1px solid var(--line);border-radius:99px;white-space:nowrap}
+  .pill b{color:var(--ink)} .pill span{color:var(--dim)}
+  .pill select{background:#222833;color:var(--ink);border:1px solid var(--line);
+               border-radius:5px;padding:2px 4px;font:inherit;font-size:12px;margin:0 4px}
+  .pill select:disabled{opacity:.5}
+  .clock{margin-left:auto;text-align:right;line-height:1.25;
+         font-variant-numeric:tabular-nums}
+  .clock b{font-size:15px;letter-spacing:.02em}
+  .clock span{color:var(--dim);font-size:10px}
+  .clock div:last-child b{font-size:12px;color:var(--dim)}
+  .tx-on{background:#3a1414;border-color:#7a2020;color:#ff8080}
+  .tx-off{color:var(--dim)}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 6px var(--side,340px);
+        gap:0 8px;padding:10px 12px;align-items:start}
+  .gutter{cursor:col-resize;background:transparent;border-radius:3px;
+          align-self:stretch;min-height:120px}
+  .gutter:hover,.gutter.drag{background:#2f6ea8}
+  aside{display:grid;gap:8px;align-content:start;
+        max-height:calc(100vh - var(--chrome,150px));overflow-y:auto;overflow-x:hidden}
+  @media(max-width:880px){main{grid-template-columns:1fr}.gutter{display:none}
+                        aside{max-height:none}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .panel h2::before{content:"▾";font-size:9px;opacity:.5;transition:transform .15s}
+  .panel.collapsed h2::before{transform:rotate(-90deg)}
+  .panel.collapsed > *:not(h2){display:none !important}
+  .panel > h2 + *{border-top:0}
+  .panel h2{margin:0;padding:7px 12px;font-size:11px;letter-spacing:.1em;
+            cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px;
+            text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line)}
+  .bar{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  button{background:#222833;color:var(--ink);border:1px solid var(--line);
+         border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit;font-size:12px}
+  button:hover{background:#2b323f}
+  button.on{background:#1d3a5c;border-color:#2f6ea8}
+  button.danger{background:#3a1414;border-color:#7a2020;color:#ff9090}
+  button.go{background:#14301f;border-color:#2b7a4b;color:#7ff0ad;font-weight:600}
+  table{width:100%;border-collapse:collapse}
+  th{position:sticky;top:0;background:#1c212a;color:var(--dim);font-weight:500;
+     text-align:left;padding:6px 8px;font-size:11px;border-bottom:1px solid var(--line);cursor:pointer}
+  td{padding:3px 8px;border-bottom:1px solid #1a1f27;white-space:nowrap}
+  tr:hover td{background:#1d222b}
+  .scroll{max-height:calc(100vh - var(--chrome2,240px));overflow:auto}
+  .cq{color:var(--cq)} .tome{color:var(--me);font-weight:600}
+  a.qrz{color:inherit;text-decoration:none;border-bottom:1px dotted #4a5666}
+  a.qrz:hover{border-bottom-style:solid;color:#9fd0ff}
+  #ptip{position:fixed;z-index:60;display:none;background:var(--panel);
+        border:1px solid var(--line);border-radius:8px;padding:6px;
+        box-shadow:0 8px 24px #000a;max-width:240px}
+  #ptip.on{display:block}
+  #ptip img{display:block;max-width:220px;max-height:200px;border-radius:5px}
+  #ptip .cap{font-size:11px;color:var(--dim);padding:4px 2px 0;text-align:center}
+  .newcall{color:var(--new)} .dupe{color:var(--dim)}
+  .snr-hi{color:var(--ok)} .snr-lo{color:var(--dim)}
+  .txrow td{background:#1a1410;border-bottom:1px solid #33261a}
+  .txtag{color:#ff9a4d;font-weight:700}
+  .bandcol{color:#8fb8d8}
+  .txmsg{color:#ffb877}
+  .call-btn{padding:2px 8px;font-size:11px}
+  .card{display:none;padding:8px 12px;border-bottom:1px solid var(--line);
+        background:#141a22}
+  .card.on{display:block}
+  .card .nm{font-weight:700;color:var(--ink)}
+  .card .sub{color:var(--dim);font-size:11px;margin-top:2px;
+             display:flex;gap:10px;flex-wrap:wrap}
+  .card .ent{color:#9fd0ff}
+  .card .ent.new{color:#ff7de9;font-weight:700}
+  .cqmode{padding:8px 12px;background:#14220f;border-bottom:1px solid #2f5a20;
+          color:#b6e89a;font-size:12px;font-weight:600}
+  .thread{max-height:200px;overflow:auto}
+  .turn{display:grid;grid-template-columns:52px 30px 1fr;gap:6px;
+        padding:4px 12px;border-bottom:1px solid #1e232b;align-items:baseline}
+  .turn .t{color:var(--dim);font-size:11px}
+  .turn.tx .d{color:#ff9a4d;font-weight:700}
+  .turn.rx .d{color:var(--new);font-weight:700}
+  .turn.tx .m{color:#ffb877}
+  .turn.rx .m{color:var(--ink)}
+  .turn.rep{background:#2a1a1a}
+  .turn .rpt{color:var(--warn);font-size:10px;margin-left:6px}
+  .stall{padding:6px 12px;background:#3a1414;color:#ff9090;font-size:11px}
+  .psktop{max-height:110px;overflow:auto}
+  .psktop div{display:flex;justify-content:space-between;padding:2px 12px;font-size:11px}
+  .psktop .g{color:var(--dim)}
+  .bandcond{display:grid;grid-template-columns:1fr auto auto;gap:2px 8px;padding:6px 12px}
+  .bandcond .hdr{color:var(--dim);font-size:10px;text-transform:uppercase}
+  .vhflist{padding:4px 12px 8px}
+  .vhflist div{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}
+  .vhflist .open{color:#2ee06a}
+  .bandcond span{font-size:11px;padding:1px 0}
+  .c-good{color:#2ee06a} .c-fair{color:#f0a02c} .c-poor{color:#ff7070}
+  .newdx{color:#ff7de9;font-weight:700}
+  .advice{padding:6px 12px;font-size:11px}
+  .advice.good{color:var(--ok)} .advice.warn{color:#f0a02c} .advice.bad{color:var(--warn)}
+  #map{display:block;background:#0b1016;cursor:crosshair}
+  .kv{display:flex;justify-content:space-between;padding:3px 12px;border-bottom:1px solid #1a1f27;font-size:12px}
+  .kv span:first-child{color:var(--dim)}
+  .qsolog{max-height:200px;overflow:auto}
+  .qso{padding:6px 12px;border-bottom:1px solid #1e232b}
+  .qso .l1{display:flex;justify-content:space-between;align-items:baseline}
+  .qso .call{font-weight:700;color:var(--ink);font-size:14px}
+  .qso .when{color:var(--dim);font-size:11px}
+  .qso .l2{color:var(--dim);font-size:11px;margin-top:2px;
+           display:flex;gap:10px;flex-wrap:wrap}
+  .qso .rpt{color:var(--ink)}
+  .up{font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line)}
+  .up.ok{color:#2ee06a;border-color:#2b7a4b}
+  .up.pending{color:var(--dim)}
+  .up.bad{color:#ff9090;border-color:#7a2020}
+  ul{margin:0;padding:0}
+  .muted{color:var(--dim)} .err{color:var(--warn)}
+  .recbar{display:none;align-items:center;gap:10px;padding:8px 14px;
+          background:#132437;border-bottom:1px solid #245079;color:#9fd0ff;
+          position:sticky;top:0;z-index:19;font-size:12px}
+  .recbar.on{display:flex}
+  .recbar.ok{background:#14301f;border-color:#2b7a4b;color:#9df0c0}
+  .ricon{opacity:.7}
+  .recbtn{background:#1d3a5c;border:1px solid #2f6ea8;color:#cfe6ff;
+          border-radius:5px;padding:2px 10px;cursor:pointer;font:inherit;font-size:11px}
+  .recx{background:none;border:none;color:inherit;opacity:.5;cursor:pointer;
+        font-size:16px;padding:0 4px;margin-left:auto}
+  .recx:hover{opacity:1}
+  .warnbar{display:none;align-items:center;gap:12px;padding:9px 14px;
+           background:#3a2c14;border-bottom:1px solid #7a5f20;color:#ffd79a;
+           position:sticky;top:0;z-index:21;font-weight:600}
+  .warnbar.on{display:flex}
+  .warnbar.crit{background:#3a1414;border-color:#7a2020;color:#ffb3b3}
+  .warnbtn{margin-left:auto;background:#14301f;border:1px solid #2b7a4b;
+           color:#7ff0ad;border-radius:6px;padding:4px 12px;cursor:pointer;font:inherit}
+  .txbar{display:none;align-items:center;gap:12px;padding:9px 14px;
+         background:#3a1414;border-bottom:1px solid #7a2020;color:#ffb3b3;
+         position:sticky;top:0;z-index:20}
+  .txbar.on{display:flex}
+  .txbar .dot{width:10px;height:10px;border-radius:99px;background:#ff5d5d;
+              animation:pulse 1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .txbar .lbl{font-weight:700;letter-spacing:.08em;font-size:11px}
+  .txbar .msg{font-size:15px;font-weight:700;color:#fff}
+  .txbar .meta{margin-left:auto;color:#e69a9a;font-size:11px}
+  .tabs{display:flex;gap:2px;padding:0 12px;background:var(--panel);
+        border-bottom:1px solid var(--line)}
+  .tab{background:none;border:none;border-bottom:2px solid transparent;
+       color:var(--dim);padding:8px 16px;cursor:pointer;font:inherit;font-size:12px;
+       letter-spacing:.06em;text-transform:uppercase;border-radius:0}
+  .tab:hover{color:var(--ink);background:transparent}
+  .tab.on{color:var(--ink);border-bottom-color:#4aa3ff}
+  .logview{display:none;padding:12px}
+  .logview.on{display:block}
+  .logtop{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;align-items:start}
+  @media(max-width:880px){.logtop{grid-template-columns:1fr}}
+  .entlist{max-height:300px;overflow:auto;padding:4px 0}
+  .entlist div{display:flex;justify-content:space-between;padding:2px 12px;font-size:11px}
+  .entlist .n{color:var(--dim)}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+         background:#1d3a5c;border:1px solid #2f6ea8;padding:8px 16px;border-radius:8px;
+         opacity:0;transition:opacity .2s;pointer-events:none}
+  #toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <div class="pill"><b id="me">—</b> <span id="grid"></span></div>
+  <div class="pill"><span>band</span>
+    <select id="bandsel">
+      <option value="">—</option>
+      <option value="1840000">160m 1.840</option>
+      <option value="3573000">80m 3.573</option>
+      <option value="5357000">60m 5.357</option>
+      <option value="7074000">40m 7.074</option>
+      <option value="10136000">30m 10.136</option>
+      <option value="14074000">20m 14.074</option>
+      <option value="18100000">17m 18.100</option>
+      <option value="21074000">15m 21.074</option>
+      <option value="24915000">12m 24.915</option>
+      <option value="28074000">10m 28.074</option>
+      <option value="50313000">6m 50.313</option>
+      <option value="144174000">2m 144.174</option>
+    </select>
+    <b id="dial">—</b></div>
+  <div class="pill"><span>mode</span> <b id="mode">—</b></div>
+  <div class="pill"><span>tx</span> <b id="txdf">—</b> <span>rx</span> <b id="rxdf">—</b></div>
+  <div class="pill" id="txstate">idle</div>
+  <div class="pill"><span>dx</span> <b id="dxcall">—</b></div>
+  <div class="pill"><span>cfg</span> <b id="cfg">—</b></div>
+  <div class="pill"><span>link</span> <b id="link">connecting…</b></div>
+  <div class="clock">
+    <div><b id="clk-utc">--:--:--</b> <span>UTC</span></div>
+    <div><b id="clk-loc">--:--:--</b> <span id="clk-tz">local</span></div>
+  </div>
+</header>
+
+<div id="recbar" class="recbar">
+  <span class="ricon">◈</span>
+  <span id="rec-text"></span>
+  <button id="rec-go" class="recbtn">QSY</button>
+  <button id="rec-hide" class="recx">×</button>
+</div>
+
+<div id="warnbar" class="warnbar">
+  <span class="wtext" id="warn-text"></span>
+  <button id="armtx" class="warnbtn">Enable TX</button>
+</div>
+
+<div id="txbar" class="txbar">
+  <span class="dot"></span>
+  <span class="lbl">TRANSMITTING</span>
+  <span class="msg" id="txbar-msg">—</span>
+  <span class="meta" id="txbar-meta"></span>
+</div>
+
+<nav class="tabs">
+  <button class="tab on" data-view="operate">Operate</button>
+  <button class="tab" data-view="log">Logbook</button>
+</nav>
+
+<main id="view-operate">
+  <section class="panel">
+    <h2>Band activity</h2>
+    <div class="bar">
+      <button id="f-cq">CQ only</button>
+      <button id="f-new">New only</button>
+      <button id="f-me">To me</button>
+      <button id="f-mine">My TX</button>
+      <button id="f-dx">New DXCC</button>
+      <button id="s-snr" class="on">Sort: SNR</button>
+      <button id="s-time">Sort: time</button>
+      <button id="s-km">Sort: distance</button>
+      <button id="clear">Clear</button>
+      <button id="cq" class="go">Call CQ</button>
+      <button id="autocq">Auto CQ</button>
+      <button id="autocall">Auto Call</button>
+      <button id="halt" class="danger">STOP</button>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>UTC</th><th>Band</th><th>dB</th><th>DT</th><th>Hz</th><th>Message</th>
+          <th>Grid</th><th>DXCC</th><th>km</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="gutter" id="gutter"></div>
+  <aside>
+    <section class="panel">
+      <h2>Current QSO <span id="qso-with" class="muted"></span></h2>
+      <div id="card" class="card"></div>
+      <div id="thread" class="thread"><div class="muted" style="padding:10px 12px">
+        idle — no QSO, not calling CQ</div></div>
+    </section>
+    <section class="panel">
+      <h2>Map</h2>
+      <canvas id="map" style="width:100%;height:var(--maph,240px)"></canvas>
+      <div class="kv"><span>click a dot to call</span><b id="map-n">0</b></div>
+    </section>
+    <section class="panel">
+      <h2>Who hears me <span id="psk-at" class="muted"></span></h2>
+      <div class="kv"><span>receivers (15 min)</span><b id="psk-n">—</b></div>
+      <div class="kv"><span>median / best</span><b id="psk-snr">—</b></div>
+      <div id="psk-top" class="psktop"></div>
+    </section>
+    <section class="panel">
+      <h2>Solar &amp; propagation <span id="bands-at" class="muted"></span></h2>
+      <div class="kv"><span>SFI / SSN</span><b id="b-sfi">—</b></div>
+      <div class="kv"><span>A / K index</span><b id="b-ak">—</b></div>
+      <div class="kv"><span>geomag field</span><b id="b-geo">—</b></div>
+      <div class="kv"><span>X-ray</span><b id="b-xray">—</b></div>
+      <div class="kv"><span>solar wind / Bz</span><b id="b-wind">—</b></div>
+      <div class="kv"><span>proton / electron</span><b id="b-flux">—</b></div>
+      <div class="kv"><span>aurora (lat)</span><b id="b-aur">—</b></div>
+      <div class="kv"><span>signal noise</span><b id="b-sn">—</b></div>
+      <div class="kv"><span>MUF</span><b id="b-muf">—</b></div>
+      <div id="b-cond" class="bandcond"></div>
+      <div id="b-vhf" class="vhflist"></div>
+    </section>
+    <section class="panel">
+      <h2>Radio</h2>
+      <div class="kv"><span>PO (peak)</span><b id="r-po">—</b></div>
+      <div class="kv"><span>ALC (peak)</span><b id="r-alc">—</b></div>
+      <div class="kv"><span>SWR</span><b id="r-swr">—</b></div>
+      <div class="kv"><span>RF power set</span><b id="r-pwr">—</b></div>
+      <div class="kv"><span>S-meter</span><b id="r-s">—</b></div>
+      <div class="kv"><span>ATU</span><b id="r-tune" class="muted">—</b></div>
+      <div class="kv"><span>band setup</span><b id="r-band" class="muted">—</b></div>
+      <div style="padding:6px 12px;display:flex;gap:6px"><button id="tunebtn">Run tuner</button><button id="bandbtn">Setup band</button></div>
+      <div id="r-advice" class="advice"></div>
+    </section>
+    <section class="panel">
+      <h2>Uploads</h2>
+      <div class="kv"><span>QRZ ok</span><b id="up-ok">0</b></div>
+      <div class="kv"><span>failed</span><b id="up-fail">0</b></div>
+      <div class="kv"><span>last</span><b id="up-last" class="muted">—</b></div>
+    </section>
+    <section class="panel">
+      <h2>Logged this session <span id="qso-count" class="muted"></span></h2>
+      <div id="qsos" class="qsolog"><div class="muted" style="padding:10px 12px">
+        no QSOs yet this session</div></div>
+    </section>
+  </aside>
+</main>
+
+<section id="view-log" class="logview">
+  <div class="logtop">
+    <div class="panel logstats">
+      <h2>Logbook</h2>
+      <div class="kv"><span>QSOs</span><b id="lg-total">—</b></div>
+      <div class="kv"><span>DXCC entities</span><b id="lg-ents">—</b></div>
+      <div class="kv"><span>bands</span><b id="lg-bands">—</b></div>
+      <div id="lg-entlist" class="entlist"></div>
+    </div>
+    <div class="panel">
+      <h2>All contacts</h2>
+      <canvas id="logmap" style="width:100%;height:340px"></canvas>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:12px">
+    <div class="bar">
+      <input id="lg-search" placeholder="filter call / grid / entity / band"
+             style="background:#222833;color:var(--ink);border:1px solid var(--line);
+                    border-radius:6px;padding:5px 9px;font:inherit;min-width:240px">
+      <button id="lg-refresh">Refresh</button>
+      <span id="lg-shown" class="muted" style="align-self:center"></span>
+    </div>
+    <div class="scroll" style="max-height:52vh">
+      <table>
+        <thead><tr>
+          <th data-k="date">Date</th><th data-k="time">UTC</th><th data-k="call">Call</th>
+          <th data-k="entity">DXCC</th><th data-k="grid">Grid</th>
+          <th data-k="km">km</th><th data-k="bearing">Brg</th>
+          <th data-k="band">Band</th><th data-k="mode">Mode</th>
+          <th>Sent</th><th>Rcvd</th>
+        </tr></thead>
+        <tbody id="lg-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div id="ptip"></div>
+<div id="toast"></div>
+
+<script src="/static/worldmap.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let decodes = [], status = {}, sortKey = "snr";
+const filters = {cq:false, newonly:false, tome:false, mine:false, newdx:false};
+
+function toast(t, err){ const e=$("#toast"); e.textContent=t;
+  e.style.background = err ? "#3a1414" : "#1d3a5c"; e.classList.add("show");
+  setTimeout(()=>e.classList.remove("show"), 2200); }
+
+/* ---------- websocket ---------- */
+let ws;
+function connect(){
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("#link").textContent = "live"; $("#link").style.color="var(--ok)";
+                      startBeat(); };
+  ws.onclose = () => { $("#link").textContent = "reconnecting…"; $("#link").style.color="var(--warn)";
+                       setTimeout(connect, 2000); };
+  ws.onmessage = ev => {
+    const {type, data} = JSON.parse(ev.data);
+    if (type === "snapshot"){
+      status = data.status||{}; decodes = data.decodes||[];
+      $("#me").textContent = data.me.call; $("#grid").textContent = data.me.grid;
+      setUploads(data.uploads); setRig(data.rig); setPsk(data.psk);
+      setBands(data.bands); setTune(data.tune); setBandfix(data.bandfix);
+      workedEntities = data.entities || workedEntities;
+      if (data.last_decode_age != null) lastDecodeAt = Date.now() - data.last_decode_age*1000;
+      (data.qsos||[]).forEach(addQso);
+      renderStatus(); render();
+    } else if (type === "decode"){
+      decodes.push(data); if (decodes.length > 400) decodes.shift();
+      if (!data.tx) lastDecodeAt = Date.now();
+      render(); updateWarn();
+    } else if (type === "status"){ status = data; renderStatus(); }
+    else if (type === "qso"){ addQso(data); toast(`logged ${data.call}`); }
+    else if (type === "uploads"){ setUploads(data); }
+    else if (type === "rig"){ setRig(data); }
+    else if (type === "qso_update"){ if (data && data.call) addQso(data); }
+    else if (type === "psk"){ setPsk(data); }
+    else if (type === "bands"){ setBands(data); }
+    else if (type === "tune"){ setTune(data); }
+    else if (type === "bandfix"){ setBandfix(data); }
+    else if (type === "card"){ setCard(data); }
+    else if (type === "ack"){
+      if (data.action === "call") toast(data.ok ? `calling ${data.who}` : "call failed — no WSJT-X link", !data.ok);
+      if (data.action === "halt") toast(data.ok ? "STOPPED — TX disabled until you Call CQ" : "halt incomplete — check the radio", !data.ok);
+      if (data.action === "cq") toast(data.ok ? `calling ${data.who}` : "CQ failed — no WSJT-X link", !data.ok);
+      if (data.action === "bandsetup") toast(data.ok ? `band setup running on ${data.who}` : "no band known", !data.ok);
+      if (data.action === "tune") toast(data.ok ? "tuner run" : "tune failed / skipped", !data.ok);
+      if (data.action === "click") toast(data.ok ? `toggled ${data.who}` : `could not reach ${data.who}`, !data.ok);
+      if (data.action === "armtx") toast(data.ok ? "TX enabled" : "could not reach WSJT-Z window", !data.ok);
+      if (data.action === "setfreq") toast(data.ok ? `QSY ${data.who} MHz` : `QSY to ${data.who} failed`, !data.ok);
+    }
+  };
+}
+connect();
+
+/* ---------- dead-man heartbeat ----------
+   If this browser stops responding while the station is armed, the server
+   stops transmitting. Idea from w5eez/ft8web. */
+let beatTimer = null;
+function startBeat(){
+  clearInterval(beatTimer);
+  const beat = () => { if (ws && ws.readyState === 1)
+                         ws.send(JSON.stringify({action:"beat"})); };
+  beat(); beatTimer = setInterval(beat, 3000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });
+}
+
+/* ---------- header ---------- */
+function renderStatus(){
+  if (status.dial){
+    $("#dial").textContent = (status.dial/1e6).toFixed(6);
+    const sel = $("#bandsel");
+    if (!sel.dataset.busy){
+      // match to the nearest listed band within 20 kHz, else show blank
+      let hit = "";
+      for (const o of sel.options){
+        if (o.value && Math.abs(+o.value - status.dial) < 20000){ hit = o.value; break; }
+      }
+      sel.value = hit;
+    }
+  }
+  $("#mode").textContent = status.mode || "—";
+  $("#txdf").textContent = status.tx_df ?? "—";
+  $("#rxdf").textContent = status.rx_df ?? "—";
+  $("#dxcall").textContent = status.dx_call || "—";
+  $("#cfg").textContent = status.config_name || "—";
+  updateTxBar(); updateWarn();
+  const t = $("#txstate");
+  if (status.transmitting){ t.textContent = "TRANSMITTING"; t.className = "pill tx-on"; }
+  else if (status.tx_enabled){ t.textContent = "tx enabled"; t.className = "pill"; }
+  else { t.textContent = "idle"; t.className = "pill tx-off"; }
+  renderThread();
+}
+
+/* ---------- table ---------- */
+function visible(){
+  let v = decodes.filter(d => d.sender);
+  if (filters.mine) return v.filter(d => d.tx).slice().sort((a,b)=>b.tms-a.tms).slice(0,150);
+  if (filters.cq) v = v.filter(d => d.cq || d.tx);
+  if (filters.newonly) v = v.filter(d => !d.worked || d.tx);
+  if (filters.tome) v = v.filter(d => d.to_me || d.tx);
+  if (filters.newdx) v = v.filter(d => d.new_entity || d.tx);
+  const key = {snr:(a,b)=>b.snr-a.snr, time:(a,b)=>b.tms-a.tms,
+               km:(a,b)=>(b.km||0)-(a.km||0)}[sortKey];
+  return v.slice().sort(key).slice(0,150);
+}
+const CALLRE = /\b([A-Z0-9]{1,3}\d[A-Z0-9]*[A-Z](?:\/[A-Z0-9]+)?)\b/g;
+const NOTCALL = new Set(["CQ","DX","RR73","RRR","POTA","SOTA","QRP","TEST","NA","EU","AS","SA","AF","OC"]);
+function linkify(msg){
+  return msg.replace(CALLRE, c =>
+    NOTCALL.has(c) ? c
+      : `<a class="qrz" href="https://www.qrz.com/db/${encodeURIComponent(c)}" `
+        + `target="_blank" rel="noopener">${c}</a>`);
+}
+
+function render(){
+  const rows = visible().map(d => {
+    if (d.tx) return `<tr class="txrow">
+      <td class="muted">${d.utc}</td>
+      <td class="bandcol">${d.band||""}</td>
+      <td class="txtag">TX</td>
+      <td class="muted"></td>
+      <td class="muted">${d.df}</td>
+      <td class="txmsg">${linkify(d.msg)}</td>
+      <td></td><td></td><td></td><td></td></tr>`;
+    const cls = d.to_me ? "tome" : d.cq ? "cq" : "";
+    const who = d.worked ? "dupe" : "newcall";
+    return `<tr>
+      <td class="muted">${d.utc}</td>
+      <td class="bandcol">${d.band||""}</td>
+      <td class="${d.snr>=-10?"snr-hi":"snr-lo"}">${d.snr>0?"+":""}${d.snr}</td>
+      <td class="muted">${d.dt.toFixed(1)}</td>
+      <td class="muted">${d.df}</td>
+      <td class="${cls}">${linkify(d.msg)}</td>
+      <td class="${who}">${d.grid||""}</td>
+      <td class="${d.new_entity?"newdx":"muted"}">${d.entity||""}</td>
+      <td class="muted">${d.km??""}</td>
+      <td><button class="call-btn" data-id="${d.id}">call</button></td>
+    </tr>`;
+  }).join("");
+  renderThread();
+  $("#rows").innerHTML = rows || `<tr><td colspan="10" class="muted" style="padding:14px">waiting for decodes…</td></tr>`;
+  drawMap();
+}
+$("#rows").addEventListener("click", e => {
+  const b = e.target.closest("button[data-id]"); if (!b) return;
+  ws.send(JSON.stringify({action:"call", id:+b.dataset.id}));
+});
+$("#halt").onclick = () => ws.send(JSON.stringify({action:"halt"}));
+$("#cq").onclick = () => ws.send(JSON.stringify({action:"cq"}));
+$("#armtx").onclick = () => ws.send(JSON.stringify({action:"armtx"}));
+// WSJT-Z checkbox offsets inside its client area (no keyboard accelerators)
+$("#autocq").onclick   = () => ws.send(JSON.stringify(
+  {action:"click", x:34,  y:414, label:"Auto CQ"}));
+$("#autocall").onclick = () => ws.send(JSON.stringify(
+  {action:"click", x:153, y:414, label:"Auto Call"}));
+$("#bandsel").onchange = e => {
+  const hz = +e.target.value; if (!hz) return;
+  const sel = e.target; sel.dataset.busy = "1"; sel.disabled = true;
+  toast(`QSY to ${(hz/1e6).toFixed(3)}…`);
+  ws.send(JSON.stringify({action:"setfreq", hz}));
+  setTimeout(() => { delete sel.dataset.busy; sel.disabled = false; }, 3000);
+};
+$("#clear").onclick = () => { decodes = []; render(); };
+function toggle(id, key){ $(id).onclick = () => {
+  filters[key] = !filters[key]; $(id).classList.toggle("on", filters[key]); render(); }; }
+toggle("#f-cq","cq"); toggle("#f-new","newonly"); toggle("#f-me","tome"); toggle("#f-mine","mine"); toggle("#f-dx","newdx");
+[["#s-snr","snr"],["#s-time","time"],["#s-km","km"]].forEach(([sel,k]) => {
+  $(sel).onclick = () => { sortKey = k;
+    ["#s-snr","#s-time","#s-km"].forEach(s => $(s).classList.toggle("on", s===sel)); render(); };
+});
+
+/* ---------- uploads + log ---------- */
+let curCard = null;
+function setCard(c){
+  curCard = c; const el = $("#card");
+  if (!c || !c.call){ el.className = "card"; return; }
+  const newEnt = c.entity && !(workedEntities||[]).includes(c.entity);
+  const bits = [];
+  if (c.qth) bits.push(c.qth);
+  if (c.grid) bits.push(c.grid);
+  if (c.km != null) bits.push(`${c.km.toLocaleString()} km`);
+  if (c.bearing != null) bits.push(`${c.bearing}\u00b0`);
+  if (c.cls) bits.push(c.cls);
+  if (c.licensed) bits.push(`lic ${c.licensed}`);
+  el.innerHTML =
+    `<div class="nm">${c.name || c.call}</div>
+     <div class="sub">
+       <span class="ent ${newEnt?"new":""}">${c.entity || "unknown entity"}${newEnt?" · NEW":""}</span>
+       ${bits.map(b=>`<span>${b}</span>`).join("")}
+     </div>`;
+  el.className = "card on";
+}
+let workedEntities = [];
+
+function renderThread(){
+  const dx = (status.dx_call||"").toUpperCase();
+  const el = $("#thread"), lbl = $("#qso-with");
+  if (!dx){
+    lbl.textContent = "";
+    $("#card").className = "card";
+    // calling CQ? show our CQs and anyone answering, so a reply is obvious
+    const mine = decodes.filter(d =>
+        (d.tx && (d.msg||"").startsWith("CQ")) || d.to_me
+      ).slice().sort((a,b)=>a.tms-b.tms).slice(-10);
+    const cqing = mine.some(d => d.tx);
+    if (!mine.length){
+      el.innerHTML = '<div class="muted" style="padding:10px 12px">'
+        + 'idle — no QSO, not calling CQ</div>'; return;
+    }
+    el.innerHTML = (cqing ? '<div class="cqmode">Calling CQ — waiting for a reply</div>' : "")
+      + mine.map(d => `<div class="turn ${d.tx?"tx":"rx"}">
+          <span class="t">${d.utc}</span>
+          <span class="d">${d.tx?"TX":"RX"}</span>
+          <span class="m">${linkify(d.msg)}</span></div>`).join("");
+    el.scrollTop = el.scrollHeight;
+    return;
+  }
+  lbl.textContent = "with " + dx;
+  const turns = decodes.filter(d =>
+      (d.tx && (d.to||"").toUpperCase() === dx) ||
+      (!d.tx && ((d.sender||"").toUpperCase() === dx || (d.to||"").toUpperCase() === dx))
+    ).slice().sort((a,b)=>a.tms-b.tms).slice(-14);
+  if (!turns.length){ el.innerHTML =
+      '<div class="muted" style="padding:10px 12px">waiting for '+dx+'…</div>'; return; }
+  // flag consecutive identical messages from the same side (the stall signature)
+  let html = "", lastRx = null, rxRepeats = 0;
+  turns.forEach(d => {
+    let rep = false;
+    // only a stall if they are repeating something addressed to US. A station
+    // repeating CQ is just calling CQ, not failing to hear our reply.
+    if (!d.tx && d.to_me){
+      if (lastRx !== null && d.msg === lastRx){ rxRepeats++; rep = true; }
+      else { rxRepeats = 0; }
+      lastRx = d.msg;
+    } else if (!d.tx){
+      lastRx = null; rxRepeats = 0;
+    }
+    html += `<div class="turn ${d.tx?"tx":"rx"} ${rep?"rep":""}">
+        <span class="t">${d.utc}</span>
+        <span class="d">${d.tx?"TX":"RX"}</span>
+        <span class="m">${linkify(d.msg)}${rep?'<span class="rpt">repeat</span>':""}</span>
+      </div>`;
+  });
+  if (rxRepeats >= 2) html += `<div class="stall">${dx} has repeated the same reply to you `
+      + `${rxRepeats+1}× — it is not receiving your response. Check TX level, or QSY.</div>`;
+  el.innerHTML = html;
+  el.scrollTop = el.scrollHeight;
+}
+
+let lastRig = {};
+function updateTxBar(){
+  const bar = $("#txbar");
+  const on = !!status.transmitting;
+  bar.classList.toggle("on", on);
+  if (!on) return;
+  $("#txbar-msg").textContent = (status.tx_message || "").trim() || "(no message)";
+  const bits = [];
+  if (status.tx_df != null) bits.push(`${status.tx_df} Hz`);
+  if (status.dial) bits.push((status.dial/1e6).toFixed(3));
+  if (lastRig.po != null) bits.push(`${Number(lastRig.po).toFixed(1)} W`);
+  if (lastRig.alc != null) bits.push(`ALC ${Number(lastRig.alc).toFixed(2)}`);
+  if (lastRig.swr != null) bits.push(`SWR ${Number(lastRig.swr).toFixed(2)}`);
+  $("#txbar-meta").textContent = bits.join("  \u00b7  ");
+}
+
+function setTune(t){
+  if (!t) return;
+  const el = $("#r-tune");
+  el.textContent = t.msg || (t.count ? `${t.count} tune(s)` : "—");
+  el.className = (t.msg||"").startsWith("tun") && !(t.msg||"").includes("failed")
+                 ? "" : "muted";
+}
+$("#tunebtn").onclick = () => ws.send(JSON.stringify({action:"tune"}));
+$("#bandbtn").onclick = () => {
+  if (confirm("Run band setup? This transmits a few times to tune the antenna "
+            + "and set drive, then disables TX again.")) {
+    ws.send(JSON.stringify({action:"bandsetup"}));
+  }
+};
+function setBandfix(b){
+  const el = $("#r-band"); if (!el || !b) return;
+  if (b.state === "running"){ el.textContent = `${b.band}: measuring…`; el.className=""; }
+  else if (b.state === "error"){ el.textContent = b.err || "failed"; el.className="err"; }
+  else if (b.att != null){
+    el.textContent = `${b.band}: att ${b.att}, ${Number(b.po).toFixed(1)}W, ALC ${Number(b.alc).toFixed(2)}`;
+    el.className = "";
+  } else { el.textContent = `${b.band||""}: no result`; el.className="muted"; }
+}
+
+/* ---------- layout: collapsible panels, draggable gutter, auto-fit ---------- */
+const LS = { get k(){ return "ft8web.layout"; },
+  load(){ try { return JSON.parse(localStorage.getItem(this.k)) || {}; } catch(e){ return {}; } },
+  save(o){ try { localStorage.setItem(this.k, JSON.stringify(o)); } catch(e){} } };
+let layout = LS.load();
+
+function applyLayout(){
+  if (layout.side) document.documentElement.style.setProperty("--side", layout.side + "px");
+  (layout.collapsed || []).forEach(t => {
+    document.querySelectorAll(".panel").forEach(pn => {
+      const h = pn.querySelector("h2");
+      if (h && h.textContent.trim().startsWith(t)) pn.classList.add("collapsed");
+    });
+  });
+}
+function persistCollapsed(){
+  layout.collapsed = [...document.querySelectorAll(".panel.collapsed h2")]
+    .map(h => h.textContent.trim().split(" ")[0]);
+  LS.save(layout);
+}
+document.addEventListener("click", e => {
+  const h = e.target.closest(".panel h2"); if (!h) return;
+  h.parentElement.classList.toggle("collapsed");
+  persistCollapsed(); measureChrome(); if (typeof drawMap === "function") drawMap();
+});
+
+/* drag the gutter to resize the sidebar */
+(function(){
+  const g = $("#gutter"); if (!g) return;
+  let dragging = false;
+  g.addEventListener("mousedown", e => { dragging = true; g.classList.add("drag");
+                                         e.preventDefault(); });
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const w = Math.min(620, Math.max(240, window.innerWidth - e.clientX - 18));
+    document.documentElement.style.setProperty("--side", w + "px");
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false; g.classList.remove("drag");
+    layout.side = parseInt(getComputedStyle(document.documentElement)
+                    .getPropertyValue("--side")) || 340;
+    LS.save(layout); if (typeof drawMap === "function") drawMap();
+  });
+})();
+
+/* keep the activity list and sidebar inside the viewport */
+function measureChrome(){
+  const head = document.querySelector("header");
+  const tabs = document.querySelector(".tabs");
+  const bars = [...document.querySelectorAll(".recbar.on,.warnbar.on,.txbar.on")];
+  let h = (head?.offsetHeight||0) + (tabs?.offsetHeight||0) + 46;
+  bars.forEach(b => h += b.offsetHeight);
+  document.documentElement.style.setProperty("--chrome", h + "px");
+  const barRow = document.querySelector("#view-operate .bar");
+  document.documentElement.style.setProperty("--chrome2",
+     (h + (barRow?.offsetHeight||0)) + "px");
+}
+window.addEventListener("resize", () => { measureChrome();
+  if (typeof drawMap === "function") drawMap(); });
+applyLayout(); measureChrome(); setInterval(measureChrome, 3000);
+
+/* ---------- logbook tab ---------- */
+let logData = null, logMap = null, logSort = "date", logDesc = true;
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x===b));
+  const log = b.dataset.view === "log";
+  $("#view-operate").style.display = log ? "none" : "";
+  $("#view-log").classList.toggle("on", log);
+  if (log && !logData) loadLog(); else if (log) drawLogMap();
+});
+async function loadLog(){
+  try {
+    const r = await fetch("/api/log"); logData = await r.json();
+    $("#lg-total").textContent = logData.total;
+    $("#lg-ents").textContent = (logData.entities||[]).length;
+    $("#lg-bands").textContent = (logData.bands||[]).join(" ");
+    $("#lg-entlist").innerHTML = (logData.entities||[]).map(([e,n]) =>
+      `<div><span>${e}</span><span class="n">${n}</span></div>`).join("");
+    renderLog(); drawLogMap();
+  } catch(e){ $("#lg-rows").innerHTML =
+      `<tr><td colspan="11" class="err" style="padding:12px">${e}</td></tr>`; }
+}
+$("#lg-refresh").onclick = () => { logData = null; loadLog(); };
+$("#lg-search").oninput = () => renderLog();
+document.querySelectorAll("#view-log th[data-k]").forEach(th => th.onclick = () => {
+  const k = th.dataset.k;
+  logDesc = (logSort === k) ? !logDesc : true; logSort = k; renderLog();
+});
+function logFiltered(){
+  if (!logData) return [];
+  const q = ($("#lg-search").value||"").toLowerCase().trim();
+  let rows = logData.qsos.filter(r => !q ||
+    [r.call,r.grid,r.entity,r.band,r.mode].some(v => (v||"").toLowerCase().includes(q)));
+  rows = rows.slice().sort((a,b) => {
+    const x=a[logSort], y=b[logSort];
+    const n = (typeof x === "number" || typeof y === "number");
+    const c = n ? (x||0)-(y||0) : String(x||"").localeCompare(String(y||""));
+    return logDesc ? -c : c;
+  });
+  return rows;
+}
+function renderLog(){
+  const rows = logFiltered();
+  $("#lg-shown").textContent = `${rows.length} shown`;
+  $("#lg-rows").innerHTML = rows.slice(0,600).map(r => `<tr>
+    <td class="muted">${r.date}</td><td class="muted">${r.time}</td>
+    <td><a class="qrz" target="_blank" rel="noopener"
+           href="https://www.qrz.com/db/${encodeURIComponent(r.call)}">${r.call}</a></td>
+    <td class="newcall">${r.entity||""}</td>
+    <td class="muted">${r.grid||""}</td>
+    <td>${r.km!=null?r.km.toLocaleString():""}</td>
+    <td class="muted">${r.bearing!=null?r.bearing+"\u00b0":""}</td>
+    <td class="bandcol">${r.band||""}</td><td class="muted">${r.mode||""}</td>
+    <td>${r.sent||""}</td><td>${r.rcvd||""}</td></tr>`).join("")
+    || `<tr><td colspan="11" class="muted" style="padding:12px">no matches</td></tr>`;
+  drawLogMap();
+}
+function drawLogMap(){
+  if (!logData) return;
+  const home = gridLL($("#grid").textContent || "CM88VC"); if (!home) return;
+  if (!logMap) logMap = new AzMap($("#logmap"), home[0], home[1]);
+  const pts = logFiltered().filter(r => r.grid).map(r => ({
+    ll: gridLL(r.grid), grid: r.grid + r.call, snr: -5,
+    cq:false, to_me:false, worked:true, sender:r.call }));
+  logMap.draw(pts);
+}
+
+/* ---------- QRZ photo on hover ---------- */
+const photoCache = new Map();
+let ptipTimer = null;
+async function showPhoto(call, x, y){
+  const tip = $("#ptip");
+  let d = photoCache.get(call);
+  if (d === undefined){
+    photoCache.set(call, null);                 // in-flight marker
+    try { d = await (await fetch(`/api/photo/${encodeURIComponent(call)}`)).json(); }
+    catch(e){ d = {photo:null}; }
+    photoCache.set(call, d);
+  }
+  if (!d || !d.photo) return;                   // no photo: show nothing
+  tip.innerHTML = `<img src="${d.photo}" alt="${call}">`
+                + `<div class="cap">${call}</div>`;
+  tip.classList.add("on");
+  const w = 240, h = 240;
+  tip.style.left = Math.min(window.innerWidth - w - 12, x + 14) + "px";
+  tip.style.top  = Math.min(window.innerHeight - h - 12, y + 14) + "px";
+}
+document.addEventListener("mouseover", e => {
+  const a = e.target.closest("a.qrz"); if (!a) return;
+  const call = a.textContent.trim();
+  clearTimeout(ptipTimer);
+  ptipTimer = setTimeout(() => showPhoto(call, e.clientX, e.clientY), 320);
+});
+document.addEventListener("mouseout", e => {
+  if (!e.target.closest("a.qrz")) return;
+  clearTimeout(ptipTimer); $("#ptip").classList.remove("on");
+});
+
+/* ---------- clocks ---------- */
+function tick(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,"0");
+  $("#clk-utc").textContent = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  $("#clk-loc").textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+try {
+  $("#clk-tz").textContent =
+    new Intl.DateTimeFormat(undefined,{timeZoneName:"short"})
+      .formatToParts(new Date()).find(x=>x.type==="timeZoneName").value;
+} catch(e){}
+tick(); setInterval(tick, 1000);
+
+function setPsk(p){
+  if (!p) return;
+  $("#psk-at").textContent = p.at ? "@"+p.at : "";
+  $("#psk-n").textContent = p.count ?? "—";
+  $("#psk-snr").textContent = (p.median!=null? (p.median>0?"+":"")+p.median : "—")
+                              + " / " + (p.best!=null? (p.best>0?"+":"")+p.best : "—") + " dB";
+  $("#psk-top").innerHTML = (p.top||[]).map(t =>
+    `<div><span><a class="qrz" target="_blank" rel="noopener" href="https://www.qrz.com/db/${encodeURIComponent(t.call)}">${t.call}</a></span><span class="g">${t.grid}</span>`
+    + `<span>${t.snr>0?"+":""}${t.snr}</span></div>`).join("");
+}
+let recDismissed = "";
+function setRecommend(r){
+  const bar = $("#recbar");
+  if (!r || recDismissed === (r.band + r.rating)){ bar.className = "recbar"; return; }
+  $("#rec-text").textContent = r.msg;
+  $("#rec-go").style.display = r.ok ? "none" : "";
+  $("#rec-go").dataset.hz = r.hz || "";
+  bar.className = "recbar on" + (r.ok ? " ok" : "");
+  bar.dataset.key = r.band + r.rating;
+}
+$("#rec-hide").onclick = () => { recDismissed = $("#recbar").dataset.key || "x";
+                                 $("#recbar").className = "recbar"; };
+$("#rec-go").onclick = () => { const hz = +$("#rec-go").dataset.hz;
+  if (hz){ ws.send(JSON.stringify({action:"setfreq", hz})); } };
+
+function condClass(v){ v=(v||"").toLowerCase();
+  return v==="good"?"c-good":v==="fair"?"c-fair":v==="poor"?"c-poor":""; }
+function setBands(b){
+  if (!b) return;
+  const set = (id,v) => { const e=$(id); if (e) e.textContent = v; };
+  $("#bands-at").textContent = b.updated ? b.updated.replace(/^\d+ /,"") : (b.at?"@"+b.at:"");
+  set("#b-sfi", `${b.sfi ?? "—"} / ${b.sun ?? "—"}`);
+  set("#b-ak",  `${b.a ?? "—"} / ${b.k ?? "—"}`);
+  set("#b-geo", b.geomag ?? "—");
+  set("#b-xray", b.xray ?? "—");
+  set("#b-wind", `${b.solarwind ?? "—"} km/s · Bz ${b.bz ?? "—"}`);
+  set("#b-flux", `${b.protonflux ?? "—"} / ${b.electronflux ?? "—"}`);
+  set("#b-aur", `${b.aurora ?? "—"}${b.auroralat ? " ("+b.auroralat+"°)" : ""}`);
+  set("#b-sn", b.sn ?? "—");
+  set("#b-muf", b.muf && b.muf !== "NoRpt" ? b.muf : "no report");
+  const g = $("#b-geo");
+  if (g) g.className = /quiet|inactive/i.test(b.geomag||"") ? "" : "err";
+  const c = b.cond || {};
+  const order = ["80m-40m","30m-20m","17m-15m","12m-10m"];
+  setRecommend(b.recommend);
+  $("#b-cond").innerHTML =
+    '<span class="hdr">band</span><span class="hdr">day</span><span class="hdr">night</span>'
+    + order.filter(k => c[k]).map(k => {
+        const d = c[k].day || "—", n = c[k].night || "—";
+        return `<span>${k}</span><span class="${condClass(d)}">${d}</span>`
+             + `<span class="${condClass(n)}">${n}</span>`;
+      }).join("");
+  const v = b.vhf || {};
+  $("#b-vhf").innerHTML = Object.entries(v).map(([k,val]) => {
+    const open = !/closed/i.test(val);
+    return `<div><span>${k.replace("/"," ").replace(/_/g," ")}</span>`
+         + `<span class="${open?"open":""}">${val}</span></div>`;
+  }).join("");
+}
+
+/* ---------- warning bar: tx disabled / dead air ---------- */
+let lastDecodeAt = Date.now();
+let txOffSince = null;
+function updateWarn(){
+  const bar = $("#warnbar"), t = $("#warn-text");
+  const age = (Date.now() - lastDecodeAt)/1000;
+  // debounce: WSJT-Z restarts leave TX briefly off while the auto-arm runs,
+  // and the server watchdog re-arms it. Only warn if it stays off.
+  if (status.tx_enabled === false){
+    if (txOffSince === null) txOffSince = Date.now();
+  } else { txOffSince = null; }
+  const offFor = txOffSince ? (Date.now() - txOffSince)/1000 : 0;
+  if (txOffSince && offFor > 30){
+    bar.className = "warnbar on"; $("#armtx").style.display = "";
+    t.textContent = `TX has been disabled for ${Math.round(offFor)}s — auto-recovery failed`;
+  } else if (age > 45){
+    bar.className = "warnbar on crit"; $("#armtx").style.display = "none";
+    t.textContent = `No decodes for ${Math.round(age)}s — check radio, audio, or USB`;
+  } else { bar.className = "warnbar"; }
+}
+setInterval(updateWarn, 2000);
+
+function setRig(r){
+  if (r && r.ok){ lastRig = r; if (status.transmitting) updateTxBar(); }
+  if (!r || !r.ok){ $("#r-advice").textContent = "rigctld unreachable";
+                    $("#r-advice").className="advice bad"; return; }
+  const pk = r.peak || {};
+  const po = pk.po ?? r.po, alc = pk.alc ?? r.alc, swr = pk.swr ?? r.swr;
+  $("#r-po").textContent  = po  != null ? po.toFixed(1)+" W" : "—";
+  $("#r-alc").textContent = alc != null ? alc.toFixed(3) : "—";
+  $("#r-swr").textContent = swr != null ? swr.toFixed(2) : "—";
+  if (r.rfpower_pct != null) $("#r-pwr").textContent = r.rfpower_pct + " %";
+  if (r.strength != null) $("#r-s").textContent = r.strength + " dB";
+  const a = $("#r-advice");
+  if (po == null || po === 0){ a.textContent = "waiting for a transmission…"; a.className="advice"; }
+  else if (alc > 0.35){ a.textContent = `ALC ${alc.toFixed(2)} is high — reduce Pwr slider`; a.className="advice bad"; }
+  else if (po < 15){ a.textContent = `only ${po.toFixed(1)} W of 25 — raise Pwr slider`; a.className="advice warn"; }
+  else if (swr > 2.0){ a.textContent = `SWR ${swr.toFixed(1)} — check antenna`; a.className="advice bad"; }
+  else { a.textContent = `${po.toFixed(1)} W, ALC ${alc.toFixed(2)} — good`; a.className="advice good"; }
+}
+
+function setUploads(u){ if(!u) return;
+  $("#up-ok").textContent = u.ok; $("#up-fail").textContent = u.failed;
+  const l = $("#up-last"); l.textContent = u.last || "—";
+  l.className = (u.last||"").includes("uploaded") ? "" : "muted"; }
+let qsoList = [];
+function upClass(u){ return u === "ok" ? "ok" : (u||"").startsWith("failed") ? "bad" : "pending"; }
+function upText(u){ return u === "ok" ? "QRZ ✓" : u === "no key" ? "no key"
+                         : (u||"").startsWith("failed") ? "QRZ ✗" : "…"; }
+function addQso(q){
+  const i = qsoList.findIndex(x => x.call === q.call && x.time === q.time);
+  if (i >= 0) qsoList[i] = {...qsoList[i], ...q}; else qsoList.unshift(q);
+  renderQsos();
+}
+function renderQsos(){
+  const el = $("#qsos");
+  $("#qso-count").textContent = qsoList.length ? `(${qsoList.length})` : "";
+  if (!qsoList.length){ el.innerHTML =
+    '<div class="muted" style="padding:10px 12px">no QSOs yet this session</div>'; return; }
+  el.innerHTML = qsoList.slice(0,25).map(q => `
+    <div class="qso">
+      <div class="l1">
+        <span class="call"><a class="qrz" target="_blank" rel="noopener" href="https://www.qrz.com/db/${encodeURIComponent(q.call)}">${q.call}</a></span>
+        <span class="when">${q.time || q.at} UTC
+          <span class="up ${upClass(q.upload)}">${upText(q.upload)}</span></span>
+      </div>
+      <div class="l2">
+        ${q.grid ? `<span>${q.grid}</span>` : `<span class="muted">no grid</span>`}
+        ${q.km != null ? `<span>${q.km.toLocaleString()} km</span>` : ""}
+        ${q.bearing != null ? `<span>${q.bearing}\u00b0</span>` : ""}
+        <span class="rpt">sent ${q.sent||"—"} / rcvd ${q.rcvd||"—"}</span>
+        <span>${q.band||""} ${q.mode||""}</span>
+      </div>
+    </div>`).join("");
+}
+
+/* ---------- map (azimuthal equidistant, centred on QTH) ---------- */
+function gridLL(g){
+  g = (g||"").toUpperCase(); if (g.length < 4) return null;
+  const A=65;
+  let lon = (g.charCodeAt(0)-A)*20 - 180 + (+g[2])*2 + 1;
+  let lat = (g.charCodeAt(1)-A)*10 - 90 + (+g[3]) + 0.5;
+  if (g.length >= 6){
+    lon += (g.charCodeAt(4)-A)*(2/24) + 1/24 - 1;
+    lat += (g.charCodeAt(5)-A)*(1/24) + 1/48 - 0.5;
+  }
+  return [lat, lon];
+}
+let azmap = null;
+function ensureMap(){
+  if (azmap) return azmap;
+  const home = gridLL($("#grid").textContent || "CM88VC");
+  if (!home) return null;
+  azmap = new AzMap($("#map"), home[0], home[1]);
+  azmap.onpick = s => { if (s.id != null) ws.send(JSON.stringify({action:"call", id:s.id})); };
+  return azmap;
+}
+function drawMap(){
+  const m = ensureMap(); if (!m) return;
+  const pts = visible().filter(d => !d.tx && d.grid).map(d => ({
+    ll: gridLL(d.grid), grid: d.grid, snr: d.snr, cq: d.cq,
+    to_me: d.to_me, worked: d.worked, id: d.id, sender: d.sender,
+  })).filter(p => p.ll);
+  m.draw(pts);
+  $("#map-n").textContent = pts.length;
+}
+window.addEventListener("resize", () => { if (azmap) drawMap(); });
+</script>
+</body>
+</html>

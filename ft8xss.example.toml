@@ -1,0 +1,19 @@
+# Copy to ~/.config/ft8xss.toml and edit. Never commit a filled-in copy.
+[station]
+callsign = "N0CALL"
+grid     = "AA00aa"
+
+[server]
+http_port = 8073
+udp_port  = 2237          # must match WSJT-X "UDP Server port"
+bind      = "0.0.0.0"     # "127.0.0.1" to require an SSH tunnel
+
+[rig]
+rigctld = "127.0.0.1:4532"
+
+[qrz]
+logbook_key = ""          # QRZ logbook API key, for automatic upload
+
+[safety]
+deadman_seconds = 12      # 0 disables
+auto_arm        = false   # true makes the station transmit unattended
