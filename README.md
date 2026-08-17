@@ -31,7 +31,8 @@ no forked decoder, no replacement DSP, and it keeps working when WSJT-X updates.
   band; filter by CQ / new / new-DXCC / addressed-to-you; sort by signal, time
   or distance
 - **Click to call** — double-click any decode, or use its call button, or
-  Call CQ, straight from the browser
+  Call CQ, straight from the browser. Rows too old for WSJT-X to answer stop
+  offering a call rather than failing silently
 - **Current QSO thread** — the exchange as a conversation, with a warning when
   the other station keeps repeating a reply to you (they are not hearing you)
 - **Logbook** — full history with map, entity summary, sortable table, filters

@@ -69,6 +69,25 @@ PROBE = r"""
                r.callsign_links_left_alone = sent.length === before; }
 
     r.stop_button_present = !!document.querySelector("#halt");
+
+    // Rows past the reply window must not offer a call at all: WSJT-X will not
+    // answer them, and a button that cannot work is worse than no button.
+    const stale = document.querySelector("#rows tr.stale");
+    r.stale_rows_exist = !!stale;
+    if (stale){
+      r.stale_row_has_no_id = !stale.hasAttribute("data-id");
+      r.stale_row_has_no_button = !stale.querySelector("button.call-btn");
+      const before = calls(); dbl(stale);
+      r.stale_row_not_callable = calls() === before;
+    }
+    // and a fresh row must go stale on its own, without a redraw
+    const fresh = document.querySelector("#rows tr.hail[data-tms]");
+    if (fresh && window.ageRows){
+      fresh.dataset.tms = String(((Date.now() - 600000) % 86400000 + 86400000) % 86400000);
+      window.ageRows();
+      r.fresh_row_ages_in_place = fresh.classList.contains("stale")
+                                  && !fresh.hasAttribute("data-id");
+    }
     document.title = "RESULT " + JSON.stringify(r);
   }, 2500);
 })();
@@ -135,6 +154,19 @@ class Interface(unittest.TestCase):
 
     def test_stop_button_exists(self):
         self.check("stop_button_present")
+
+    def test_rows_past_the_reply_window_are_read_only(self):
+        """WSJT-X will not answer them, so offering a call is a trap: the
+        request goes nowhere and the station carries on regardless."""
+        self.check("stale_rows_exist")
+        self.check("stale_row_has_no_id")
+        self.check("stale_row_has_no_button")
+        self.check("stale_row_not_callable")
+
+    def test_a_row_goes_read_only_as_it_ages(self):
+        """Rows are redrawn only when a decode arrives. On a quiet band one
+        would otherwise stay clickable long after it stopped being answerable."""
+        self.check("fresh_row_ages_in_place")
 
 
 if __name__ == "__main__":

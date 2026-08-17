@@ -80,6 +80,13 @@ def build_decodes():
     """Three T/R cycles of traffic, oldest first, with one of our own overs."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
     out, idx = [], 1
+    # a few minutes of history first: those rows are past the reply window, so
+    # they show as read-only, which is the behaviour worth demonstrating
+    for old in (7, 5):
+        when = now - timedelta(minutes=old)
+        for snr, dt, df, msg in TRAFFIC[:6]:
+            out.append(decode(idx, snr, dt, df, msg, when))
+            idx += 1
     for cycle in range(3):
         when = now - timedelta(seconds=15 * (2 - cycle))
         for snr, dt, df, msg in TRAFFIC:

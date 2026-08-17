@@ -78,6 +78,7 @@
   .bandcol{color:#8fb8d8}
   .txmsg{color:#ffb877}
   .call-btn{padding:2px 8px;font-size:11px}
+  tr.stale td{opacity:.45}
   tr.hail{cursor:pointer}
   tr.hail:hover td{background:rgba(255,255,255,.04)}
   .card{display:none;padding:8px 12px;border-bottom:1px solid var(--line);
@@ -703,6 +704,8 @@ function visible(){
   if (filters.tome) v = v.filter(d => d.to_me || d.tx);
   if (filters.newdx) v = v.filter(d => d.new_entity || d.tx);
   // every sort breaks ties by newest, so the top of the list is never stale
+  const now = Date.now();
+  v = v.filter(d => d.tx || ageOf(d, now) < DROP_AFTER);
   const key = {snr:  (a,b) => (b.snr - a.snr)             || newestFirst(a,b),
                time: newestFirst,
                km:   (a,b) => ((b.km||0) - (a.km||0))     || newestFirst(a,b)}[sortKey];
@@ -718,6 +721,7 @@ function linkify(msg){
 }
 
 function render(){
+  const nowMs = Date.now();
   const rows = visible().map(d => {
     if (d.tx) return `<tr class="txrow">
       <td class="muted">${d.utc}</td>
@@ -729,7 +733,15 @@ function render(){
       <td></td><td></td><td></td><td></td></tr>`;
     const cls = d.to_me ? "tome" : d.cq ? "cq" : "";
     const who = d.worked ? "dupe" : "newcall";
-    return `<tr class="hail" data-id="${d.id}" title="double-click to call ${esc(d.sender||"")}">
+    // Past the reply window WSJT-X will not answer it, so do not offer to.
+    const stale = ageOf(d, nowMs) >= REPLY_MAX_AGE;
+    const rowAttrs = stale
+      ? `class="stale" data-tms="${d.tms}" data-who="${esc(d.sender||"them")}"`
+        + ` title="too old to answer — wait for ${esc(d.sender||"them")} to transmit again"`
+      : `class="hail" data-id="${d.id}" data-tms="${d.tms}"`
+        + ` data-who="${esc(d.sender||"")}"`
+        + ` title="double-click to call ${esc(d.sender||"")}"`;
+    return `<tr ${rowAttrs}>
       <td class="muted">${d.utc}</td>
       <td class="bandcol">${d.band||""}</td>
       <td class="${d.snr>=-10?"snr-hi":"snr-lo"}">${d.snr>0?"+":""}${d.snr}</td>
@@ -739,7 +751,7 @@ function render(){
       <td class="${who}">${d.grid||""}</td>
       <td class="${d.new_entity?"newdx":"muted"}">${d.entity||""}</td>
       <td class="muted">${d.km??""}</td>
-      <td><button class="call-btn" data-id="${d.id}">call</button></td>
+      <td>${stale ? "" : `<button class="call-btn" data-id="${d.id}">call</button>`}</td>
     </tr>`;
   }).join("");
   renderThread();
@@ -753,6 +765,26 @@ $("#rows").addEventListener("click", e => {
 // Double-click anywhere on a row calls that station, the way WSJT-X does it.
 // The button stays: it is the discoverable version, and the only one that works
 // on a touchscreen.
+// Rows are only redrawn when a decode arrives. On a quiet band a row would
+// otherwise sit there looking clickable long after WSJT-X stopped being able to
+// answer it. Age them in place instead of redrawing the table, which would
+// throw away the operator's scroll position mid-read.
+function ageRows(){
+  const now = Date.now();
+  document.querySelectorAll("#rows tr.hail[data-tms]").forEach(tr => {
+    if (ageOf({tms: +tr.dataset.tms}, now) < REPLY_MAX_AGE) return;
+    tr.classList.remove("hail");
+    tr.classList.add("stale");
+    tr.removeAttribute("data-id");
+    tr.title = `too old to answer — wait for ${tr.dataset.who || "them"} `
+             + "to transmit again";
+    const b = tr.querySelector("button.call-btn");
+    if (b) b.remove();
+  });
+}
+setInterval(ageRows, 5000);
+window.ageRows = ageRows;   // reachable for tests
+
 $("#rows").addEventListener("dblclick", e => {
   if (e.target.closest("button")) return;      // the click handler has it
   if (e.target.closest("a")) return;           // callsign links go to QRZ
@@ -817,6 +849,13 @@ function ageOf(d, now){
   if (a < -3600000) a += 86400000;        // it landed before UTC midnight
   return a / 1000;
 }
+// WSJT-X will only answer a decode from about the current period, so past this
+// a row is history: still worth reading, not worth clicking. Kept in step with
+// REPLY_MAX_AGE on the server, which is what actually refuses the call.
+const REPLY_MAX_AGE = 90;
+// Older than this and it is not even useful history on a live band.
+const DROP_AFTER = 900;
+
 const QSO_IDLE = 180;      // no traffic with them for this long: it is over
 let lastDxSeen = null, dxSince = 0;
 
