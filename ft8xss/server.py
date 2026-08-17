@@ -242,6 +242,7 @@ class Station:
         self.swr_block = {"blocked": False, "swr": None, "at": None}
         self.txcheck = {}
         self.checked_bands = set()
+        self.fix_count = {}
         self.station = {"state": "running", "steps": [], "at": None}
         self.audio = {"tx": None, "rx": None, "hold": False,
                       "auto": AUTO_DF, "note": "", "busy": False}
@@ -264,8 +265,13 @@ class Station:
 
 
 # --- audio offsets ---------------------------------------------------------
-# FT8 lives inside the SSB filter; outside this range the rig rolls it off.
-DF_MIN, DF_MAX = 300, 2600
+# Keep to the flat middle of the transmit filter. The wider a range we allow,
+# the more attractive the edges look to a "quietest slot" search -- and the
+# edges are quiet precisely because the rig rolls off there, so nobody uses
+# them. Measured on an FT-991A at a fixed drive: 480 Hz drove ALC to 0.89 while
+# 2580 Hz produced 8 W of a 25 W setting. A calibration made at one is wrong at
+# the other, so an unbounded search leaves the drive chasing its own tail.
+DF_MIN, DF_MAX = 1000, 2000
 DF_WIDTH = 60            # a signal is ~50 Hz wide, and WSJT-X steps by 60
 MAX_DF_STEPS = 40        # how far we will travel in one move
 DF_RECHECK = 300         # a move this big can change the drive
@@ -580,7 +586,8 @@ async def ws_handler(req):
         "entities": sorted(ST.worked_entities),
         "me": {"call": MY_CALL, "grid": MY_GRID},
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
-                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM},
+                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM,
+                 "build": build_id()},
     }}))
     try:
         async for m in ws:
@@ -757,6 +764,22 @@ async def ws_handler(req):
     return ws
 
 
+def build_id():
+    """Identifies the interface currently on disk.
+
+    A browser keeps running the JavaScript it loaded, so deploying a fix does
+    nothing for a page that is already open -- it goes on calling the old
+    endpoints and behaving the old way, which is indistinguishable from the fix
+    not working. The page compares this against what it started with and offers
+    a reload when they differ.
+    """
+    try:
+        st = (STATIC / "index.html").stat()
+        return f"{int(st.st_mtime)}-{st.st_size}"
+    except OSError:
+        return "unknown"
+
+
 async def index(req):
     return web.FileResponse(STATIC / "index.html")
 
@@ -772,7 +795,8 @@ async def api_state(req):
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
         "caps": {"gui": gui.available(), "gui_reason": gui.reason(),
-                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM},
+                 "wsjtx": ST.wsjtx_addr is not None, "auto_arm": AUTO_ARM,
+                 "build": build_id()},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
     })
 
@@ -1567,6 +1591,7 @@ async def auto_place_tx():
 PO_LOW = 0.70            # below this fraction of set power, drive is too low
 ALC_HIGH = 0.30
 MAX_STEP = 60            # tenths of a dB, one adjustment
+MAX_FIXES = 3            # per band, per session -- see below
 AUTO_FIX = _env("AUTO_FIX_DRIVE", "1") == "1"
 
 
@@ -1654,6 +1679,7 @@ def clear_session(why=""):
     ST.txcheck = {}
     ST.bandfix = {}
     ST.checked_bands.clear()
+    ST.fix_count.clear()
     ST.rig = {"ok": False, "power": False}
     ST.psk = {"count": 0, "median": None, "best": None, "top": [], "at": None}
     ST.tune = {"last": 0.0, "count": 0, "swr": None, "msg": None}
@@ -2023,8 +2049,19 @@ async def evaluate_transmission(peak):
     idle = (not ST.status.get("transmitting")
             and not (ST.status.get("dx_call") or "").strip()
             and not ST.busy_band)
+    # Correcting more than a few times on one band means the corrections are not
+    # converging -- something else is moving underneath them -- and continuing
+    # just restarts WSJT-X in a loop. Stop and let the operator look.
+    fixes = ST.fix_count.get(band, 0)
+    if AUTO_FIX and idle and fixes >= MAX_FIXES:
+        ST.txcheck["stuck"] = True
+        ST.txcheck["reason"] = (f"{reason} — corrected {fixes}× on {band} without "
+                                f"settling; adjust the drive by hand")
+        await ST.broadcast("txcheck", ST.txcheck)
+        return
     if AUTO_FIX and idle and band not in ST.checked_bands:
         ST.checked_bands.add(band)
+        ST.fix_count[band] = fixes + 1
         ST.txcheck["applying"] = True
         await ST.broadcast("txcheck", ST.txcheck)
         diag.log(f"[txcheck] {band}: applying att={new_att} (station idle)")

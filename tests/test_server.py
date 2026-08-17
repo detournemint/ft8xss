@@ -61,6 +61,13 @@ class DriveCorrection(unittest.TestCase):
             self.assertIsNone(new, f"{po} W / ALC {alc} should pass")
             self.assertIn("tolerance", why)
 
+    def test_corrections_are_capped_per_band(self):
+        """Four calibrations on 20m settled at 108, 158, 128 and 118 because the
+        audio offset kept moving underneath them. Corrections that do not
+        converge must stop rather than restart WSJT-X forever."""
+        self.assertLessEqual(server.MAX_FIXES, 5)
+        self.assertGreaterEqual(server.MAX_FIXES, 1)
+
     def test_a_single_step_is_bounded(self):
         """One measurement must not be trusted with an unlimited correction."""
         new, _ = self.corr(0.6, 0.05, 100, 250)
@@ -126,10 +133,10 @@ class ClearSlot(unittest.TestCase):
     def test_our_own_transmissions_are_not_traffic(self):
         """Sitting on our own frequency must not read as interference and send
         us wandering off it every time we transmit."""
-        d = self.decodes([2200] * 20, tx=True)
-        hz, crowd, _ = server.pick_clear_slot(2200, d, "20m")
+        d = self.decodes([1500] * 20, tx=True)
+        hz, crowd, _ = server.pick_clear_slot(1500, d, "20m")
         self.assertEqual(crowd, 0)
-        self.assertEqual(hz, 2200, "nothing but our own TX here — stay put")
+        self.assertEqual(hz, 1500, "nothing but our own TX here — stay put")
 
     def test_stays_inside_the_passband(self):
         for start in (300, 1500, 2600):
@@ -146,6 +153,24 @@ class ClearSlot(unittest.TestCase):
         d = self.decodes([1260] * 9, band="40m")
         hz, crowd, _ = server.pick_clear_slot(1200, d, "20m")
         self.assertEqual(crowd, 0)
+
+    def test_keeps_off_the_filter_skirts(self):
+        """The quietest slots are at the passband edges, and they are quiet
+        because the rig rolls off there. Measured on an FT-991A at one drive
+        setting: 480 Hz pinned the ALC at 0.89, 2580 Hz made 8 W of 25. A search
+        that is free to go there leaves the drive calibration chasing the filter
+        response instead of the antenna."""
+        self.assertGreaterEqual(server.DF_MIN, 700)
+        self.assertLessEqual(server.DF_MAX, 2300)
+        crowded = self.decodes([1200] * 12 + [1500] * 12)
+        for start in (480, 1200, 2580):
+            hz, _, _ = server.pick_clear_slot(start, crowded, "20m")
+            self.assertGreaterEqual(hz, server.DF_MIN, f"from {start}")
+            self.assertLessEqual(hz, server.DF_MAX, f"from {start}")
+
+    def test_a_start_outside_the_window_is_pulled_back_in(self):
+        hz, _, _ = server.pick_clear_slot(2580, self.decodes([]), "20m")
+        self.assertLessEqual(hz, server.DF_MAX)
 
     def test_prefers_the_nearer_of_two_equally_clear_slots(self):
         hz, _, _ = server.pick_clear_slot(1500, self.decodes([1500] * 4), "20m")

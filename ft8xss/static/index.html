@@ -601,7 +601,23 @@ connect();
 
 /* ---------- capabilities ---------- */
 let caps = {gui:false, gui_reason:""};
+let loadedBuild = null;
+function checkBuild(c){
+  if (!c || !c.build) return;
+  if (loadedBuild === null){ loadedBuild = c.build; return; }
+  if (c.build === loadedBuild) return;
+  // the server is serving a different interface than the one we are running
+  const bar = $("#warnbar");
+  bar.className = "warnbar on";
+  $("#armtx").style.display = "none";
+  $("#warn-text").innerHTML =
+    'This page is out of date — the station has been updated. '
+    + '<a href="#" id="reload-now" style="color:inherit">Reload</a> to pick it up.';
+  const a = document.getElementById("reload-now");
+  if (a) a.onclick = e => { e.preventDefault(); location.reload(true); };
+}
 function applyCaps(c){
+  checkBuild(c);
   if (!c) return;
   caps = c;
   const w = $("#wlink");
