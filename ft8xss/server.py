@@ -1108,6 +1108,12 @@ async def band_change(band):
     change can never put the station on the air by itself. Drive calibration
     transmits, so it stays behind an explicit button.
     """
+    # A transmission check describes the band it was measured on. Carrying it
+    # across a band change leaves a resolved-elsewhere alert on screen, and it
+    # would reach a reconnecting browser in the snapshot too.
+    if ST.txcheck and ST.txcheck.get("band") != band:
+        ST.txcheck = {}
+        await ST.broadcast("txcheck", ST.txcheck)
     if ST.busy_band:
         return
     ST.busy_band = True
@@ -1734,6 +1740,7 @@ async def note_swr(swr, where=""):
         return
     blocked = swr >= SWR_ABORT
     was = ST.swr_block.get("blocked")
+    overridden = ST.swr_block.get("override")
     ST.swr_block = {"blocked": blocked, "swr": round(swr, 2),
                     "at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
                     "limit": SWR_ABORT}
@@ -1743,6 +1750,8 @@ async def note_swr(swr, where=""):
         await full_stop()
     elif was and not blocked:
         diag.log(f"[swr] {swr:.2f} back within limits ({where}) -- transmit allowed")
+    elif overridden and not blocked:
+        diag.log(f"[swr] {swr:.2f} measured after an override -- match is good")
     await ST.broadcast("swr", ST.swr_block)
 
 

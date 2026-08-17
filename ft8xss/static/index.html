@@ -503,7 +503,7 @@ function connect(){
       renderStatus(); render();
     } else if (type === "decode"){
       decodes.push(data); if (decodes.length > 400) decodes.shift();
-      if (!data.tx) lastDecodeAt = Date.now();
+      if (!data.tx){ lastDecodeAt = Date.now(); txQuiet = 0; }
       render(); updateWarn();
     } else if (type === "status"){ status = data; renderStatus(); }
     else if (type === "qso"){ addQso(data); toast(`logged ${data.call}`); }
@@ -809,6 +809,29 @@ function setSwr(b){
   });
   measureChrome();
 }
+/* mirrors BAND_PLAN in server.py */
+const BAND_PLAN = [[1800000,2000000,"160m"],[3500000,4000000,"80m"],
+  [5250000,5450000,"60m"],[7000000,7300000,"40m"],[10100000,10150000,"30m"],
+  [14000000,14350000,"20m"],[18068000,18168000,"17m"],[21000000,21450000,"15m"],
+  [24890000,24990000,"12m"],[28000000,29700000,"10m"],[50000000,54000000,"6m"],
+  [144000000,148000000,"2m"]];
+function bandOf(hz){
+  if (!hz) return "";
+  for (const [lo,hi,label] of BAND_PLAN) if (hz >= lo && hz <= hi) return label;
+  return "";
+}
+
+/* ---- transient notices -------------------------------------------------
+   A notice that reports a resolved condition is a confirmation, and should
+   clear itself once read. A notice that reports an unresolved one has to stay
+   until it is actually fixed. `fade` is only ever used for the first kind. */
+const fadeTimers = new Map();
+function fade(key, ms, done){
+  clearTimeout(fadeTimers.get(key));
+  fadeTimers.set(key, setTimeout(() => { fadeTimers.delete(key); done(); }, ms));
+}
+function holdFade(key){ clearTimeout(fadeTimers.get(key)); fadeTimers.delete(key); }
+
 /* ---- help references ---------------------------------------------------
    Every message the interface can put in front of an operator has an entry in
    the online reference. The marker beside it goes straight to that entry, so
@@ -876,8 +899,10 @@ function setAudio(a){
   $("#a-rx").textContent = a.rx == null ? "\u2014" : a.rx;
   $("#dfhold").checked = !!a.auto;
   const n = $("#a-note");
-  if (a.note){ n.style.display = "block"; n.textContent = a.note; }
-  else { n.style.display = "none"; }
+  if (a.note){
+    n.style.display = "block"; n.textContent = a.note;
+    fade("a-note", 20000, () => { n.style.display = "none"; n.textContent = ""; });
+  } else { n.style.display = "none"; }
   document.querySelectorAll(".nudge").forEach(b => b.disabled = !!a.busy);
 }
 document.querySelectorAll(".nudge").forEach(b => b.onclick = () =>
@@ -891,16 +916,26 @@ $("#dfhold").onchange = e =>
 let lastCheck = null;
 function setCheck(c){
   const bar = $("#chkbar");
-  if (!c || !c.band){ bar.className = "chkbar"; return; }
+  if (!c || !c.band){ bar.className = "chkbar"; holdFade("chkbar"); return; }
   lastCheck = c;
+  if (bandOf(status.dial) && c.band !== bandOf(status.dial)){
+    bar.className = "chkbar"; return;        // measured on a band we have left
+  }
   const w = c.po == null ? "?" : c.po.toFixed(1);
   if (c.ok){
+    // "within tolerance" is a result, not a standing condition
+    fade("chkbar", 12000, () => { $("#chkbar").className = "chkbar";
+                                  measureChrome(); });
     $("#chk-lbl").textContent = "TX OK";
     $("#chk-text").textContent =
       `${c.band}: ${w} W of ${c.target} W, ALC ${(c.alc ?? 0).toFixed(2)}`;
     $("#chk-fix").style.display = "none";
     bar.className = "chkbar on ok";
   } else {
+    // an uncorrected problem stays put; a correction that landed can go
+    if (c.applied) fade("chkbar", 15000, () => { $("#chkbar").className = "chkbar";
+                                                 measureChrome(); });
+    else holdFade("chkbar");
     $("#chk-lbl").textContent = c.applying ? "ADJUSTING" : "TX CHECK";
     setWarn($("#chk-text"), c.applied
       ? `${c.band}: ${c.reason} \u2014 drive corrected, ${c.att} \u2192 ${c.applied}`
@@ -926,7 +961,10 @@ function setStation(st){
     : "Station is running.";
   $("#stn-stop").disabled  = idle;
   $("#stn-start").disabled = !idle;
-  if ((st.steps||[]).length) $("#stn-msg").textContent = st.steps.join(" \u00b7 ");
+  if ((st.steps||[]).length){
+    $("#stn-msg").textContent = st.steps.join(" \u00b7 ");
+    fade("stn-msg", 25000, () => { $("#stn-msg").textContent = ""; });
+  }
 }
 $("#stn-stop").onclick = () => {
   if (!confirm("Shut the station down?\n\nStops transmitting, powers the radio "
@@ -973,6 +1011,9 @@ function setBandfix(b){
   const el = $("#r-band"); if (!el || !b) return;
   if (b.state === "running"){ el.textContent = `${b.band}: measuring…`; el.className=""; }
   else if (b.state in BANDFIX_HELP){
+    if (bandOf(status.dial) && b.band && b.band !== bandOf(status.dial)){
+      el.textContent = "—"; el.className = "muted"; return;
+    }
     setWarn(el, b.err || "failed", BANDFIX_HELP[b.state]); el.className = "err";
   }
   else if (b.att != null){
@@ -1283,9 +1324,21 @@ function setBands(b){
 /* ---------- warning bar: tx disabled / dead air ---------- */
 let lastDecodeAt = Date.now();
 let txOffSince = null;
+// Twelve T/R periods of listening with nothing at all. A dead receive path is
+// worth knowing about, but not urgently -- and an alarm that cries wolf on
+// every quiet band gets ignored when it finally matters. Anything under this is
+// a quiet band or a QSO in progress.
+const QUIET_LIMIT = 180;
+// Time spent transmitting is time the receiver was deaf, so it must not count
+// towards a decode drought. During a QSO you transmit every other slot, which
+// on a quiet band is enough to trip a naive timer over and over.
+let txQuiet = 0, lastWarnTick = Date.now();
 function updateWarn(){
   const bar = $("#warnbar"), t = $("#warn-text");
-  const age = (Date.now() - lastDecodeAt)/1000;
+  const now = Date.now();
+  if (status.transmitting) txQuiet += (now - lastWarnTick)/1000;
+  lastWarnTick = now;
+  const age = (now - lastDecodeAt)/1000 - txQuiet;
   // debounce: WSJT-X restarts leave TX briefly off while arming runs,
   // and the server watchdog re-arms it. Only warn if it stays off.
   if (status.tx_enabled === false){
@@ -1307,10 +1360,10 @@ function updateWarn(){
       setWarn(t, "TX is off — click Call CQ, or a station, to transmit",
               "tx-off");
     }
-  } else if (age > 45){
+  } else if (age > QUIET_LIMIT){
     bar.className = "warnbar on crit"; $("#armtx").style.display = "none";
-    setWarn(t, `No decodes for ${Math.round(age)}s — check radio, audio, or USB`,
-            "no-decodes");
+    setWarn(t, `No decodes for ${Math.round(age)}s of receiving — `
+             + "check radio, audio, or USB", "no-decodes");
   } else { bar.className = "warnbar"; }
 }
 setInterval(updateWarn, 2000);
