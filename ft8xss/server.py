@@ -152,6 +152,23 @@ BAND_PLAN = [
 ]
 
 
+def decode_age(d):
+    """Seconds since a decode landed, from its ms-since-UTC-midnight stamp."""
+    if not d or d.get("tms") is None:
+        return 1e9
+    a = (int(time.time() * 1000) % 86400000) - d["tms"]
+    if a < -3600000:                      # it arrived before UTC midnight
+        a += 86400000
+    return a / 1000.0
+
+
+# WSJT-X matches a Reply against its own list of decodes for the current period.
+# Ask it to answer something older and the packet is dropped without a word --
+# the station simply carries on doing whatever it was doing, which looks exactly
+# like the button not working.
+REPLY_MAX_AGE = 90
+
+
 def band_of(hz):
     """The amateur band a frequency falls in, or "" if it is not in one.
 
@@ -604,6 +621,14 @@ async def ws_handler(req):
                         "action": "call", "ok": False, "who": tx_block_msg()}}))
                     continue
                 d = next((x for x in ST.decodes if x["id"] == req_msg.get("id")), None)
+                age = decode_age(d)
+                if d and age > REPLY_MAX_AGE:
+                    await ws.send_str(json.dumps({"type": "ack", "data": {
+                        "action": "call", "ok": False,
+                        "who": f"that decode is {int(age)}s old — WSJT-X only "
+                               f"answers current ones. Wait for {d['sender']} "
+                               f"to transmit again."}}))
+                    continue
                 if d:
                     await auto_place_tx()
                 if d and ST.status.get("tx_enabled") is not True:
@@ -612,6 +637,22 @@ async def ws_handler(req):
                 who = d["sender"] if d else None
                 if not ok and ST.wsjtx_addr is None:
                     who = "waiting for WSJT-X — it has not sent a packet yet"
+                if ok:
+                    # the reply is fire-and-forget, so confirm WSJT-X took it
+                    want = (d["sender"] or "").upper()
+                    took = False
+                    for _ in range(14):
+                        await asyncio.sleep(0.5)
+                        if (ST.status.get("dx_call") or "").upper() == want:
+                            took = True
+                            break
+                    if not took:
+                        ok = False
+                        who = (f"WSJT-X did not take the call to {want} — it is "
+                               f"still doing whatever it was doing. Try again "
+                               f"when they next transmit.")
+                        diag.log(f"[call] {want}: reply sent but dx_call is "
+                                 f"{ST.status.get('dx_call')!r}")
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "call", "ok": ok, "who": who}}))
             elif act == "halt":
@@ -1378,8 +1419,17 @@ async def tx_watchdog():
         disabled_since = now if not ok else None
 
 
+# PSK Reporter asks for no more than one automated query every five minutes.
+# Going faster gets you throttled, and a throttled query looks exactly like
+# nobody hearing you -- which is the one thing this panel exists to tell you.
+PSK_INTERVAL = 300
+PSK_WAKE = None                 # set on the running loop; wakes the poll early
+
+
 async def psk_poll():
     """Who is hearing us right now, straight from PSK Reporter."""
+    global PSK_WAKE
+    PSK_WAKE = asyncio.Event()
     url = ("https://retrieve.pskreporter.info/query?senderCallsign="
            f"{MY_CALL}&flowStartSeconds=-900")
     while True:
@@ -1394,6 +1444,11 @@ async def psk_poll():
                 if c not in best or snr > best[c][1]:
                     best[c] = (g, snr)
             snrs = sorted(v[1] for v in best.values())
+            if not best and "receptionReport" not in body:
+                # no reports and no report elements at all: the query did not
+                # come back with data, rather than nobody hearing us
+                diag.log("[psk] no reception reports in the response "
+                         "(throttled, or nothing heard yet)")
             ST.psk = {
                 "count": len(best),
                 "median": snrs[len(snrs) // 2] if snrs else None,
@@ -1407,7 +1462,11 @@ async def psk_poll():
         except Exception as e:
             ST.psk["error"] = type(e).__name__
             diag.error(f"[psk] {type(e).__name__}: {e}")
-        await asyncio.sleep(180)
+        try:
+            await asyncio.wait_for(PSK_WAKE.wait(), timeout=PSK_INTERVAL)
+            PSK_WAKE.clear()
+        except asyncio.TimeoutError:
+            pass
 
 
 async def bands_poll():
@@ -2010,6 +2069,8 @@ async def station_start():
     ST.station = {"state": "running" if ok else "idle", "steps": steps,
                   "checks": checks, "failed": not ok, "starting": False,
                   "at": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+    if ok and PSK_WAKE is not None:
+        PSK_WAKE.set()          # the session was cleared; refill it now
     diag.log(f"[station] {'on the air' if ok else 'start incomplete'}: "
              + "; ".join(steps))
     for c in checks:

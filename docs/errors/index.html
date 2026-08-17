@@ -100,6 +100,7 @@
   <li><a href="#alc-high">ALC … above 0.3</a></li>
   <li><a href="#stalled-qso">…has repeated the same reply</a></li>
   <li><a href="#no-gui-automation">Must be done in WSJT-X</a></li>
+  <li><a href="#stale-decode">That decode is too old</a></li>
   <li><a href="#waiting-for-wsjtx">Waiting for WSJT-X</a></li>
   <li><a href="#radio-not-on-bus">Radio is not on the USB bus</a></li>
   <li><a href="#band-setup-interrupted">A band setup was interrupted</a></li>
@@ -367,6 +368,29 @@ usb 1-2.2: USB Audio CODEC          (the rig's soundcard)</pre>
       let <b>Go on the air</b> try a CAT power-on.</dd>
     <dt>Check</dt><dd><code>ls /dev/ttyUSB*</code> — if it is empty, the radio is
       not on the bus and this is not a software fault.</dd>
+  </dl>
+</div>
+
+<div class="msg sev-info" id="stale-decode">
+  <div class="quote">that decode is 140s old — WSJT-X only answers current ones. Wait for K7CTV to transmit again.</div>
+  <h3>Too late to reply to that one<span class="pill info">retry</span></h3>
+  <p>
+    Answering a station means asking WSJT-X to reply to a specific decode, and
+    WSJT-X identifies it by its timestamp. It only matches against decodes from
+    the current period or thereabouts; ask it to answer an older one and the
+    request is dropped without a word.
+  </p>
+  <p>
+    That used to be invisible: the station simply carried on doing whatever it
+    was doing — usually calling CQ — which looks exactly like the call button
+    not working. Now it says so, and a call that <i>is</i> sent is confirmed
+    against what WSJT-X does next.
+  </p>
+  <dl>
+    <dt>Do</dt><dd>Wait for them to transmit again — the row refreshes every
+      cycle — then call the new one.</dd>
+    <dt>See also</dt><dd>“WSJT-X did not take the call”, the same problem caught
+      by confirmation rather than by age.</dd>
   </dl>
 </div>
 

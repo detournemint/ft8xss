@@ -276,6 +276,40 @@ class AdifAppend(unittest.TestCase):
         self.assertEqual(len(list(server.parse_adif(out))), 3)
 
 
+class ReplyAge(unittest.TestCase):
+    """WSJT-X matches a Reply against its own decodes for the current period.
+    Ask it to answer an older one and the packet is dropped without a word, so
+    the station carries on CQing and the button looks broken."""
+
+    def age(self, seconds_ago):
+        import time as _t
+        now = int(_t.time() * 1000) % 86400000
+        return server.decode_age({"tms": now - int(seconds_ago * 1000)})
+
+    def test_a_fresh_decode_is_answerable(self):
+        self.assertLess(self.age(5), server.REPLY_MAX_AGE)
+
+    def test_a_stale_decode_is_not(self):
+        self.assertGreater(self.age(600), server.REPLY_MAX_AGE)
+
+    def test_the_limit_allows_a_few_periods(self):
+        """An operator reading the list needs longer than one 15s slot to
+        choose, but not so long that WSJT-X has forgotten the decode."""
+        self.assertGreaterEqual(server.REPLY_MAX_AGE, 45)
+        self.assertLessEqual(server.REPLY_MAX_AGE, 180)
+
+    def test_missing_timestamp_is_infinitely_old(self):
+        self.assertGreater(server.decode_age({}), 1e6)
+        self.assertGreater(server.decode_age(None), 1e6)
+
+
+class PskReporter(unittest.TestCase):
+    def test_we_do_not_query_faster_than_they_ask(self):
+        """PSK Reporter asks for no more than one automated query every five
+        minutes. Throttled looks identical to nobody hearing you."""
+        self.assertGreaterEqual(server.PSK_INTERVAL, 300)
+
+
 class Bands(unittest.TestCase):
     def test_ft8_watering_holes_map_to_their_band(self):
         for hz, band in ((7074000, "40m"), (14074000, "20m"), (21074000, "15m"),
