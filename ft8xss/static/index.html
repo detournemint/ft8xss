@@ -617,7 +617,13 @@ function checkBuild(c){
     'This page is out of date — the station has been updated. '
     + '<a href="#" id="reload-now" style="color:inherit">Reload</a> to pick it up.';
   const a = document.getElementById("reload-now");
-  if (a) a.onclick = e => { e.preventDefault(); location.reload(true); };
+  if (a) a.onclick = e => {
+    e.preventDefault();
+    // reload(true) has been ignored by browsers for years; change the URL
+    const u = new URL(location.href);
+    u.searchParams.set("v", Date.now());
+    location.replace(u.toString());
+  };
 }
 function applyCaps(c){
   checkBuild(c);

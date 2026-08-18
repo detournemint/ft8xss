@@ -822,7 +822,18 @@ def build_id():
 
 
 async def index(req):
-    return web.FileResponse(STATIC / "index.html")
+    """Serve the interface, and tell the browser not to keep it.
+
+    The page is the whole application in one file. Cached, it goes on running
+    older code against a newer server -- which is what made a deployed fix look
+    like a fix that had failed, and cost an operator a hard refresh they had no
+    reason to know they needed.
+    """
+    resp = web.FileResponse(STATIC / "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 async def api_state(req):
