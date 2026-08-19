@@ -348,6 +348,10 @@
       <button id="clear">Clear</button>
       <button id="cq" class="go">Call CQ</button>
       <button id="halt" class="danger">STOP</button>
+      <!-- An activation is ten contacts, and hunters work the spot list rather
+           than tuning the band, so being spotted is most of getting them. -->
+      <button id="pota-spot" title="tell pota.app you are on the air">Spot me</button>
+      <span id="pota-park" style="font-size:11px;color:var(--dim);align-self:center"></span>
     </div>
     <div class="scroll">
       <table>
@@ -799,6 +803,9 @@ $("#rows").addEventListener("dblclick", e => {
   window.getSelection && window.getSelection().removeAllRanges();
   ws.send(JSON.stringify({action:"call", id:+tr.dataset.id}));
 });
+$("#pota-spot").onclick = () => {
+  if (ws) ws.send(JSON.stringify({action:"potaspot"}));
+};
 $("#halt").onclick = () => ws.send(JSON.stringify({action:"halt"}));
 $("#cq").onclick = () => ws.send(JSON.stringify({action:"cq"}));
 $("#armtx").onclick = () => ws.send(JSON.stringify({action:"armtx"}));

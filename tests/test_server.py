@@ -412,3 +412,47 @@ class Safety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class Pota(unittest.TestCase):
+    """POTA helpers. Nothing here touches the network."""
+
+    def test_grid_to_latlon_matches_the_servers_own(self):
+        """Two implementations of the same conversion is one too many, but
+        pota.py has to stand alone to stay portable, so they are checked
+        against each other instead."""
+        from ft8xss import pota
+        for g in ("CM88vc", "FN31pr", "JO62", "QF22", "IM98"):
+            a, b = server.grid_to_latlon(g), pota.grid_to_latlon(g)
+            self.assertAlmostEqual(a[0], b[0], places=2, msg=g)
+            self.assertAlmostEqual(a[1], b[1], places=2, msg=g)
+
+    def test_megahertz_is_refused(self):
+        """POTA takes kilohertz. 14.074 is accepted by the API and puts you on
+        a spot nobody is listening to."""
+        from ft8xss import pota
+        with self.assertRaises(pota.PotaError):
+            pota.spot("K6XSS", "US-3407", "14.074")
+
+    def test_callsign_and_park_are_both_required(self):
+        from ft8xss import pota
+        with self.assertRaises(pota.PotaError):
+            pota.spot("", "US-3407", "14074")
+        with self.assertRaises(pota.PotaError):
+            pota.spot("K6XSS", "", "14074")
+
+    def test_a_bad_grid_is_refused(self):
+        from ft8xss import pota
+        for bad in ("", "XX", "1234", "CM"):
+            with self.assertRaises(pota.PotaError):
+                pota.grid_to_latlon(bad)
+
+    def test_the_srp_padding_rule(self):
+        """Even length, and a leading 00 when the high bit is set so the
+        number reads as positive. Getting this wrong fails as 'bad password',
+        which is why it is pinned here."""
+        from ft8xss import pota
+        self.assertEqual(pota._pad_hex("f"), "0f")
+        self.assertEqual(pota._pad_hex("ff"), "00ff")
+        self.assertEqual(pota._pad_hex("7f"), "7f")
+        self.assertEqual(pota._pad_hex("00ff"), "00ff")

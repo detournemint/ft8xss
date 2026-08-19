@@ -24,7 +24,7 @@ from aiohttp import web, ClientSession
 # forms work too: `python3 -m ft8xss.server` and the installed entry point.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import diag
+import diag, pota
 import dxcc
 import gui
 import settings
@@ -42,6 +42,9 @@ BIND_ADDR = _env("BIND", "0.0.0.0")
 MY_GRID = _env("GRID").strip().upper()
 MY_CALL = _env("CALL").strip().upper()
 QRZ_KEY = _env("QRZ_KEY").strip()
+PARK = _env("PARK").strip().upper()
+POTA_USER = _env("POTA_USER").strip()
+POTA_PASS = _env("POTA_PASS")
 diag.register_secret(QRZ_KEY)
 LOG_ADIF = Path(_env("ADIF", str(Path.home() / "ft8xss-uploads.adif")))
 # Which WSJT-X window and service to drive when the headless helper is used.
@@ -655,6 +658,35 @@ async def ws_handler(req):
                                  f"{ST.status.get('dx_call')!r}")
                 await ws.send_str(json.dumps({"type": "ack", "data": {
                     "action": "call", "ok": ok, "who": who}}))
+            elif act == "potaspot":
+                # Self-spotting is most of an activation: hunters work the
+                # spot list, not the band. POTA wants kilohertz.
+                ref = (req_msg.get("park") or PARK).strip().upper()
+                call = (ST.status.get("de_call") or MY_CALL).strip().upper()
+                dial = ST.status.get("dial") or 0
+                khz = "%.1f" % (dial / 1000.0) if dial else ""
+                mode = ST.status.get("mode") or "FT8"
+                try:
+                    if not dial:
+                        raise pota.PotaError("no dial frequency from the radio")
+                    await asyncio.to_thread(
+                        pota.spot, call, ref, khz, mode,
+                        req_msg.get("comments") or "ft8xss")
+                    ok, who = True, f"spotted {call} at {ref} on {khz} kHz"
+                except pota.PotaError as e:
+                    ok, who = False, str(e)
+                diag.log(f"[pota] spot {ref}: {who}")
+                await ws.send_str(json.dumps({"type": "ack", "data": {
+                    "action": "potaspot", "ok": ok, "who": who}}))
+            elif act == "potaparks":
+                grid = (ST.status.get("de_grid") or MY_GRID).strip()
+                try:
+                    parks = await asyncio.to_thread(pota.nearby, grid)
+                    await ws.send_str(json.dumps({"type": "parks", "data": {
+                        "grid": grid, "parks": parks[:25]}}))
+                except pota.PotaError as e:
+                    await ws.send_str(json.dumps({"type": "ack", "data": {
+                        "action": "potaparks", "ok": False, "who": str(e)}}))
             elif act == "halt":
                 ok = await full_stop()
                 await ws.send_str(json.dumps({"type": "ack", "data": {

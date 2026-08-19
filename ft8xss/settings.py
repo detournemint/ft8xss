@@ -29,6 +29,14 @@ SCHEMA = [
     ("LOG", "WSJT-X ADIF path", "Logging", "text", True, False,
      "Defaults to ~/.local/share/WSJT-X/wsjtx_log.adi."),
 
+    ("PARK", "Park reference", "POTA", "text", False, False,
+     "The park you are activating, e.g. US-3407. Self-spotting and the "
+     "activation upload both need it. Leave blank when not at a park."),
+    ("POTA_USER", "POTA account email", "POTA", "text", False, False,
+     "Only needed to upload an activation log. Spotting works without it."),
+    ("POTA_PASS", "POTA password", "POTA", "password", False, True,
+     "Stored in ~/.config/ft8xss.env, mode 600. Only used to upload logs."),
+
     ("DEADMAN", "Dead-man timeout (s)", "Safety", "number", False, False,
      "Stop transmitting if the browser stops responding while armed. 0 disables."),
     ("AUTO_ARM", "Auto-arm transmit", "Safety", "bool", False, False,

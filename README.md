@@ -144,6 +144,29 @@ Useful to know, roughly in order:
 - Does the radio power on and off from the browser?
 - Anything that behaved oddly, however small.
 
+## POTA
+
+An activation is ten contacts and a log file. Two things decide whether you get
+the ten: whether hunters know you are there, and whether you are on a frequency
+they are watching. Hunters work the spot list rather than tuning the band, so
+self-spotting is not a convenience, it is most of the activation.
+
+- **Spot me** posts you to pota.app on the current dial frequency and mode.
+- **Nearby parks** lists what is around your grid, nearest first, so a
+  two-park trip does not need planning at the picnic table.
+
+Set `PARK` in settings to the reference you are activating, e.g. `US-3407`.
+Spotting and park lookup need no account. A POTA username and password are
+needed only to upload an activation log.
+
+Note that POTA renumbered United States parks from `K-####` to `US-####`, and
+the API answers a retired reference with a bare null rather than an error.
+
+The Cognito SRP login is ported from [ft8web](https://github.com/w5eez/ft8web)
+by Clint Todish, W5EEZ, which is GPLv3 as this is. The dead-man switch is his
+idea too. Different projects -- ft8web replaces WSJT-X, this drives it -- but
+he solved these first.
+
 ## Installation
 
 ```sh
