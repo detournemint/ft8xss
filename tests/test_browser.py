@@ -40,7 +40,15 @@ PROBE = r"""
       new MouseEvent("click", {bubbles:true, cancelable:true}));
   const calls = () => sent.filter(m => m.action === "call").length;
 
-  setTimeout(() => {
+  // Poll for the page to be ready rather than guessing at a delay. A fixed
+  // timeout is a bet on how fast the machine is, and CI lost that bet: its
+  // chromium ended the virtual-time budget before a 2500 ms timer fired, so
+  // the DOM was dumped with no result and a working interface looked broken.
+  function whenReady(go, tries){
+    if (document.querySelector("#rows tr") || tries <= 0) return go();
+    setTimeout(() => whenReady(go, tries - 1), 50);
+  }
+  whenReady(() => {
     const r = {};
     r.page_rendered = !!document.querySelector("#rows tr");
     r.no_console_errors = !window.__err;
@@ -89,7 +97,7 @@ PROBE = r"""
                                   && !fresh.hasAttribute("data-id");
     }
     document.title = "RESULT " + JSON.stringify(r);
-  }, 2500);
+  }, 60);
 })();
 window.addEventListener("error", () => { window.__err = true; });
 </script>
@@ -112,7 +120,7 @@ class Interface(unittest.TestCase):
         try:
             out = subprocess.run(
                 [CHROME, "--headless", "--disable-gpu", "--no-sandbox",
-                 "--virtual-time-budget=7000", "--dump-dom", f"file://{path}"],
+                 "--virtual-time-budget=30000", "--dump-dom", f"file://{path}"],
                 cwd=ROOT, capture_output=True, text=True, timeout=120)
         finally:
             Path(path).unlink(missing_ok=True)
