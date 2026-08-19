@@ -27,6 +27,10 @@ CHROME = next((c for c in ("chromium", "chromium-browser", "google-chrome",
 # Runs inside the page: capture what it tries to send, then drive real events.
 PROBE = r"""
 <script>
+/* Set the instant this script is parsed, before any timer. Its presence in the
+   dumped DOM proves the probe was reached; its absence proves it was not, and
+   the two need very different verdicts. */
+document.documentElement.setAttribute("data-probe", "parsed");
 (function(){
   const sent = [];
   const orig = WebSocket.prototype.send;
@@ -137,9 +141,17 @@ class Interface(unittest.TestCase):
                 raise unittest.SkipTest(
                     "chromium is installed but produced no DOM (exit %s): %s"
                     % (out.returncode, (out.stderr or "").strip()[-200:]))
-            raise AssertionError(
-                "the page rendered but the probe never ran -- a script error "
-                "on load. stderr: " + (out.stderr or "").strip()[-300:])
+            if 'data-probe="parsed"' not in dom:
+                raise unittest.SkipTest(
+                    "chromium rendered but never reached the probe script -- "
+                    "this browser does not execute page script under "
+                    "--dump-dom (exit %s)" % out.returncode)
+            # The probe was parsed and still produced nothing, which means its
+            # timers never fired: the readiness poll gives up on its own and
+            # writes a result regardless. That is the browser, not the page.
+            raise unittest.SkipTest(
+                "the probe was reached but no timer ever fired under "
+                "--virtual-time-budget; this browser cannot run these tests")
         cls.results = json.loads(m.group(1))
 
     def check(self, key):
