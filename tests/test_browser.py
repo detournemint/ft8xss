@@ -118,8 +118,20 @@ class Interface(unittest.TestCase):
             Path(path).unlink(missing_ok=True)
         m = re.search(r"RESULT (\{.*?\})", out.stdout or "")
         if not m:
-            raise AssertionError("the page produced no result — it probably "
-                                 "failed to render at all")
+            # Tell "chromium cannot run here" apart from "the page is broken".
+            # A browser that worked returns the rendered DOM whether or not the
+            # probe ran; one that could not start returns nothing at all. CI
+            # installs a chromium that exists but cannot render, so checking
+            # only that the binary is on PATH turned a missing browser into a
+            # failing interface and left the build red for a day.
+            dom = (out.stdout or "")
+            if "<html" not in dom.lower():
+                raise unittest.SkipTest(
+                    "chromium is installed but produced no DOM (exit %s): %s"
+                    % (out.returncode, (out.stderr or "").strip()[-200:]))
+            raise AssertionError(
+                "the page rendered but the probe never ran -- a script error "
+                "on load. stderr: " + (out.stderr or "").strip()[-300:])
         cls.results = json.loads(m.group(1))
 
     def check(self, key):
