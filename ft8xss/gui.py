@@ -35,6 +35,29 @@ def reason():
     return _reason
 
 
+def _window_names():
+    """Titles of the real windows on the display, for a failure message.
+
+    Only called when a match has already failed, so the cost is paid once per
+    retry rather than on every probe. Unnamed and helper windows are dropped:
+    an X display carries a lot that never had a title.
+    """
+    import subprocess
+    try:
+        ids = subprocess.run(["xdotool", "search", "--name", "."],
+                             env=ENV, capture_output=True, timeout=5)
+        names = []
+        for wid in ids.stdout.decode(errors="replace").split():
+            got = subprocess.run(["xdotool", "getwindowname", wid],
+                                 env=ENV, capture_output=True, timeout=5)
+            name = got.stdout.decode(errors="replace").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+    except Exception:
+        return []
+
+
 def available():
     """True if we can actually drive a WSJT-X window on this display.
 
@@ -59,8 +82,21 @@ def available():
         out = subprocess.run(["xdotool", "search", "--name", WINDOW],
                              env=ENV, capture_output=True, timeout=5)
         if out.returncode != 0 or not out.stdout.strip():
-            _checked, _reason, _checked_at = (
-                False, f"no window matching {WINDOW!r} on {DISPLAY}", time.time())
+            # Say which of the two this is. They look identical in the
+            # interface and have opposite remedies: an empty display means
+            # WSJT-X is still starting and the next probe will find it, so
+            # wait. Windows that are there but do not match means the title
+            # is not what we were told to look for, and waiting never fixes
+            # it -- FT8XSS_WSJTX_WINDOW has to change.
+            here = _window_names()
+            if not here:
+                why = (f"no windows on {DISPLAY} yet -- WSJT-X may still be "
+                       f"starting; retrying")
+            else:
+                why = (f"no window matching {WINDOW!r} on {DISPLAY} -- found "
+                       + ", ".join(repr(h) for h in here[:4])
+                       + "; set FT8XSS_WSJTX_WINDOW to match")
+            _checked, _reason, _checked_at = False, why, time.time()
             return False
     except Exception as e:
         _checked, _reason, _checked_at = False, f"{type(e).__name__}", time.time()
