@@ -249,6 +249,8 @@ class Station:
         self.seq = 0
         self.last_tx_msg = None
         self.last_tx_at = 0.0
+        self.last_tx_cq = False
+        self.cq_txs = 0
         self.rig = {}
         self.last_decode_ts = 0.0
         self.psk = {"count": 0, "median": None, "top": [], "at": None}
@@ -259,13 +261,14 @@ class Station:
         self.txfix = {"state": "unknown"}
         self.bandfix = {}
         self.busy_band = False
+        self.band_tuned = {}
         self.swr_block = {"blocked": False, "swr": None, "at": None}
         self.txcheck = {}
         self.checked_bands = set()
         self.fix_count = {}
         self.station = {"state": "running", "steps": [], "at": None}
-        self.audio = {"tx": None, "rx": None, "hold": False,
-                      "auto": AUTO_DF, "note": "", "busy": False}
+        self.audio = {"tx": None, "rx": None, "hold": False, "auto": AUTO_DF,
+                      "note": "", "note_at": 0.0, "busy": False}
         self.last_beat = 0.0
         self.ever_beat = False
         self.uploads = {"ok": 0, "failed": 0, "last": None}
@@ -296,6 +299,15 @@ DF_WIDTH = 60            # a signal is ~50 Hz wide, and WSJT-X steps by 60
 MAX_DF_STEPS = 40        # how far we will travel in one move
 DF_RECHECK = 300         # a move this big can change the drive
 AUTO_DF = _env("AUTO_DF", "1") == "1"
+# A CQ run holds one offset for as long as it runs; the band around it does
+# not. A station that starts up on top of us afterwards is invisible to a
+# placement made before the first transmission, so re-check as the run goes --
+# between transmissions, never during one. Only a real improvement earns a
+# move: a shuffle for one or two signals costs a drive re-check and a gap in
+# the run, and ping-pongs as stations come and go.
+AUTO_DF_EVERY = 4        # CQ transmissions between re-checks
+AUTO_DF_MARGIN = 3       # signals quieter the new slot must be to earn a move
+AUDIO_NOTE_TTL = 20      # a placement note is a verdict at a moment, not a state
 
 
 ST = Station()
@@ -397,10 +409,11 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
             if _env("DEBUG_TX"):
                 diag.log(f"[tx] add started={started} changed={changed} "
                       f"prev_tx={prev.get('transmitting')} msg={txm!r}")
+            _, addressee, _, is_cq = parse_message(txm)
             ST.last_tx_msg = txm
             ST.last_tx_at = now
+            ST.last_tx_cq = is_cq
             ST.seq += 1
-            _, addressee, _, is_cq = parse_message(txm)
             tx = {
                 "id": ST.seq, "tx": True,
                 "utc": datetime.now(timezone.utc).strftime("%H:%M:%S"),
@@ -416,6 +429,13 @@ class WsjtxProtocol(asyncio.DatagramProtocol):
             if len(ST.decodes) > MAX_DECODES:
                 del ST.decodes[:len(ST.decodes) - MAX_DECODES]
             asyncio.create_task(ST.broadcast("decode", tx))
+        # Mid-run re-placement is NOT wired up. It belongs here, but every
+        # offset move of DF_RECHECK or more invalidates the band's drive
+        # calibration -- which is stored per band, not per offset -- and
+        # applying a drive correction restarts WSJT-X. Moving the offset
+        # during a run would therefore swing the operator's power around and
+        # restart WSJT-X underneath them. Wire this up only once drive is
+        # offset-aware, or once a mid-run move is capped below DF_RECHECK.
         asyncio.create_task(ST.broadcast("status", s))
 
     def _decode(self, r):
@@ -599,7 +619,8 @@ async def ws_handler(req):
         "status": ST.status, "decodes": ST.decodes[-200:],
         "qsos": ST.qsos[-30:], "uploads": ST.uploads, "rig": ST.rig,
         "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
-        "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
+        "swr_block": ST.swr_block, "txcheck": ST.txcheck,
+        "audio": audio_view(),
         "station": ST.station, "drive": drive_state(),
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "last_decode_age": (time.time() - ST.last_decode_ts) if ST.last_decode_ts else None,
@@ -874,7 +895,8 @@ async def api_state(req):
         "qsos": ST.qsos[-30:], "uploads": ST.uploads,
         "wsjtx": str(ST.wsjtx_addr), "worked_count": len(ST.worked),
         "rig": ST.rig, "psk": ST.psk, "tune": ST.tune, "bandfix": ST.bandfix,
-        "swr_block": ST.swr_block, "txcheck": ST.txcheck, "audio": ST.audio,
+        "swr_block": ST.swr_block, "txcheck": ST.txcheck,
+        "audio": audio_view(),
         "station": ST.station, "drive": drive_state(),
         "bands": {**ST.bands, "recommend": recommend_band(band_of(ST.status.get("dial")))},
         "entities": sorted(ST.worked_entities),
@@ -912,6 +934,11 @@ async def rig_poll():
     sample fast during TX and hold the peak of each transmission."""
     peak = {"po": 0.0, "alc": 0.0, "swr": 1.0}
     was_tx = False
+    # The radio does not say who keyed it. We poll the rig's PTT, so a CW
+    # keyer, a logging program or anything else sharing the rig produces a
+    # keyed period indistinguishable from our own. Watch WSJT-X's own status
+    # through the transmission and only judge the ones it claims.
+    ours = False
     while True:
         try:
             tx = (await rig_cmd("t")) == "1"
@@ -928,19 +955,33 @@ async def rig_poll():
                     if f > peak[key] or (key == "swr" and f > peak[key]):
                         peak[key] = round(f, 3)
                 rig["peak"] = dict(peak)
+                if ST.status.get("transmitting"):
+                    ours = True
                 was_tx = True
             else:
                 if was_tx:
                     rig["peak"] = dict(peak)      # keep the last TX peaks
-                    # high SWR at the end of a transmission -> run the ATU,
-                    # but only while idle and not more often than the cooldown
-                    asyncio.create_task(note_swr(peak["swr"], "transmission"))
-                    asyncio.create_task(evaluate_transmission(dict(peak)))
-                    if (peak["swr"] >= SWR_TRIGGER
-                            and peak["po"] > 1.0
-                            and time.time() - ST.tune["last"] > TUNE_COOLDOWN):
-                        asyncio.create_task(run_tuner(peak["swr"]))
+                    if ours:
+                        # high SWR at the end of a transmission -> run the ATU,
+                        # but only while idle and not more often than cooldown
+                        asyncio.create_task(note_swr(peak["swr"], "transmission"))
+                        asyncio.create_task(
+                            evaluate_transmission(dict(peak), by_wsjtx=True))
+                        if (peak["swr"] >= SWR_TRIGGER
+                                and peak["po"] > 1.0
+                                and time.time() - ST.tune["last"] > TUNE_COOLDOWN):
+                            asyncio.create_task(run_tuner(peak["swr"]))
+                    else:
+                        # Measured on 2026-08-23: a CW harvester sharing the
+                        # rig keyed it on 40m, 15m and 10m. Every one of those
+                        # pinned the ALC, and the drive correction rewrote
+                        # WSJT-X's Pwr slider for a transmission WSJT-X never
+                        # made -- 40m went from 68 to 200 (13 dB down).
+                        diag.log(f"[rig] keyed by something other than WSJT-X "
+                                 f"-- PO={peak['po']:.1f}W ALC={peak['alc']:.2f} "
+                                 f"SWR={peak['swr']:.2f}; not judged")
                     was_tx = False
+                    ours = False
                     peak = {"po": 0.0, "alc": 0.0, "swr": 1.0}
                 else:
                     rig["peak"] = ST.rig.get("peak", {})
@@ -1026,6 +1067,17 @@ def recommend_band(current_band):
 
 SWR_TRIGGER = float(_env("SWR_TRIGGER", "2.0"))
 TUNE_COOLDOWN = float(_env("TUNE_COOLDOWN", "300"))
+# The ATU keys the transmitter. A band change is normally the operator moving,
+# so tuning once is right -- but the dial can also be moved by something else
+# sharing the rig, and then "once per band change" becomes continuous keying.
+# Measured on 2026-08-23: a CW harvester swept 40/20/10/15m and ft8xss ran the
+# ATU seven times in six minutes, into a receiver that was trying to listen.
+BAND_TUNE_COOLDOWN = float(_env("BAND_TUNE_COOLDOWN", "300"))
+
+
+def _tune_due(band, tuned, now):
+    """True if a band change may run the ATU. `tuned` maps band -> last run."""
+    return now - tuned.get(band, 0.0) >= BAND_TUNE_COOLDOWN
 # refuse to transmit for measurement above this SWR
 SWR_ABORT = float(_env("SWR_ABORT", "3.0"))
 
@@ -1249,7 +1301,12 @@ async def band_change(band):
         await ST.broadcast("txcheck", ST.txcheck)
     if ST.busy_band:
         return
+    if not _tune_due(band, ST.band_tuned, time.time()):
+        diag.log(f"[band] {band}: changed, but tuned within the last "
+                 f"{int(BAND_TUNE_COOLDOWN)}s -- not running the ATU again")
+        return
     ST.busy_band = True
+    ST.band_tuned[band] = time.time()
     try:
         ST.bandfix = {"band": band, "state": "tuning"}
         await ST.broadcast("bandfix", ST.bandfix)
@@ -1656,16 +1713,41 @@ async def set_audio_freq(which, hz, why=""):
         await push_audio()
 
 
+def audio_view():
+    """`ST.audio` with a stale note dropped.
+
+    A note reports a decision taken at a moment -- "already clear" was true
+    when it was written and says nothing about the band five minutes later.
+    It reaches a client two ways, and both must agree: the live broadcast, and
+    the snapshot handed to a page that loads afterwards. Without an expiry the
+    snapshot presents an old verdict as the current one, which is how a run
+    sat under another station while the interface said the slot was clear.
+    """
+    a = dict(ST.audio)
+    if a.get("note") and time.time() - (a.get("note_at") or 0) > AUDIO_NOTE_TTL:
+        a["note"] = ""
+    a.pop("note_at", None)
+    return a
+
+
 async def push_audio(note=None):
     ST.audio["tx"] = ST.status.get("tx_df")
     ST.audio["rx"] = ST.status.get("rx_df")
     if note is not None:
         ST.audio["note"] = note
-    await ST.broadcast("audio", ST.audio)
+        ST.audio["note_at"] = time.time()
+    await ST.broadcast("audio", audio_view())
 
 
-async def auto_place_tx():
-    """Before an operator-initiated transmission, move to a clear slot.
+async def auto_place_tx(margin=1, why="(auto, before transmit)"):
+    """Move to a clear slot: before an operator-initiated transmission, and
+    again every so often through a long CQ run.
+
+    `margin` is how many signals quieter the new slot must be to be worth the
+    move. One -- any improvement at all -- is right before a transmission we
+    have not made yet, when moving costs nothing. Mid-run it is not: the move
+    can trigger a drive re-check and interrupt a run that is already working,
+    so a bigger margin keeps it for the case that is actually hurting.
 
     Skipped when the operator has taken manual control (hold), when auto is
     off, or when we are already somewhere quiet.
@@ -1674,19 +1756,22 @@ async def auto_place_tx():
         return
     if not gui.available():
         return
+    if ST.status.get("transmitting"):
+        return            # never move the offset out from under a transmission
     band = band_of(ST.status.get("dial"))
     cur = ST.status.get("tx_df")
     hz, crowd, note = pick_clear_slot(cur, ST.decodes, band)
-    if hz is None or hz == cur:
-        await push_audio(f"holding {cur} Hz -- already clear")
-        return
     here = sum(1 for d in ST.decodes
                if not d.get("tx") and d.get("band") == band
                and d.get("df") and abs(d["df"] - (cur or 0)) < DF_WIDTH)
-    if here <= crowd:
+    if hz is None or hz == cur:
+        await push_audio(f"holding {cur} Hz -- {here} signal"
+                         f"{'' if here == 1 else 's'} nearby, nothing clearer")
+        return
+    if here - crowd < margin:
         await push_audio(f"holding {cur} Hz -- nothing quieter nearby")
         return
-    ok, msg = await set_audio_freq("tx", hz, why="(auto, before transmit)")
+    ok, msg = await set_audio_freq("tx", hz, why=why)
     await push_audio(f"auto: {note}" if ok else f"auto failed: {msg}")
 
 
@@ -1810,17 +1895,20 @@ def clear_session(why=""):
     ST.qsos.clear()
     ST.seq = 0
     ST.last_tx_msg = None
+    ST.last_tx_cq = False
+    ST.cq_txs = 0
     ST.last_decode_ts = 0.0
     ST.txcheck = {}
     ST.bandfix = {}
     ST.checked_bands.clear()
+    ST.band_tuned = {}
     ST.fix_count.clear()
     ST.rig = {"ok": False, "power": False}
     ST.psk = {"count": 0, "median": None, "best": None, "top": [], "at": None}
     ST.tune = {"last": 0.0, "count": 0, "swr": None, "msg": None}
     ST.uploads = {"ok": 0, "failed": 0, "last": None}
     ST.audio = {"tx": None, "rx": None, "hold": False, "auto": AUTO_DF,
-                "note": "", "busy": False}
+                "note": "", "note_at": 0.0, "busy": False}
     ST.swr_block = {"blocked": False, "swr": None, "at": None}
     ST.status = {}
     diag.log(f"[station] session cleared ({why})")
@@ -2156,11 +2244,18 @@ async def station_start():
     return ok
 
 
-async def evaluate_transmission(peak):
+async def evaluate_transmission(peak, by_wsjtx=False):
     """Judge a completed transmission and, if it is wrong, say so -- and fix it
     when the station is idle. Never transmits to find out; it uses the
     measurement the operator's own transmission already produced.
+
+    `by_wsjtx` must be true: the drive this corrects is WSJT-X's Pwr slider, so
+    a transmission WSJT-X did not make says nothing about it. Anything else
+    sharing the radio -- a CW keyer, another logger -- keys the same PTT, and
+    judging that rewrites a calibration to match a signal it never described.
     """
+    if not by_wsjtx:
+        return
     band = band_of(ST.status.get("dial"))
     if not band:
         return

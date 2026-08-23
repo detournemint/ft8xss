@@ -8,6 +8,7 @@ would not let go. The names say what broke, so a failure says what came back.
 """
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -187,6 +188,194 @@ class ClearSlot(unittest.TestCase):
     def test_prefers_the_nearer_of_two_equally_clear_slots(self):
         hz, _, _ = server.pick_clear_slot(1500, self.decodes([1500] * 4), "20m")
         self.assertLessEqual(abs(hz - 1500), 120)
+
+
+class ClearSlotDuringARun(unittest.IsolatedAsyncioTestCase):
+    """`auto_place_tx` margin and guards. The mid-run *trigger* is deliberately
+    not wired up (see the note in the status handler): an offset move large
+    enough to matter also invalidates the band drive calibration and restarts
+    WSJT-X. These cover the placement logic itself, which is used before every
+    operator-initiated transmission today and will be reused when a mid-run
+    move can be made offset-safe.
+
+    Placement used to happen once, before the first transmission of a run,
+    and never again. Measured on 20m: a CQ run settled on 1860 Hz while it was
+    quiet, another station started calling CQ at 1850 in the opposite slot, and
+    the run kept calling into the collision for six minutes. Every station
+    answering him transmitted in our slot on our frequency, and anyone
+    answering us landed on his run. PSK Reporter showed 162 stations hearing
+    us; not one could reply cleanly."""
+
+    def setUp(self):
+        self.moves = []
+        server.ST.clients = set()
+        server.ST.audio = {"tx": 1860, "rx": 2773, "hold": False, "auto": True,
+                           "note": "", "note_at": 0.0, "busy": False}
+        server.ST.status = {"dial": 14074000, "tx_df": 1860,
+                            "transmitting": False}
+        server.ST.decodes = []
+        self._avail, self._set = server.gui.available, server.set_audio_freq
+        server.gui.available = lambda: True
+
+        async def fake_set(which, hz, why=""):
+            self.moves.append((which, hz, why))
+            return True, "ok"
+        server.set_audio_freq = fake_set
+
+    def tearDown(self):
+        server.gui.available, server.set_audio_freq = self._avail, self._set
+
+    def crowd(self, hz, n):
+        """n signals exactly on hz. The 60 Hz grid means a signal counts for
+        one candidate only, so these counts are the crowd the picker sees."""
+        server.ST.decodes += [{"df": hz, "band": "20m", "tx": False}
+                              for _ in range(n)]
+
+    def busy_band(self, each=2):
+        for hz in range(1020, 1981, server.DF_WIDTH):
+            self.crowd(hz, each)
+
+    async def test_a_station_landing_on_us_mid_run_moves_us(self):
+        self.crowd(1860, 12)
+        await server.auto_place_tx(margin=server.AUTO_DF_MARGIN)
+        self.assertTrue(self.moves, "must not keep calling under a pile-up")
+        self.assertNotEqual(self.moves[0][1], 1860)
+
+    async def test_a_marginal_improvement_does_not_break_a_working_run(self):
+        """Mid-run a move costs a drive re-check and a gap in the run, and the
+        band shuffles constantly. Chasing every one-signal improvement would
+        leave us hopping instead of calling."""
+        self.busy_band(2)
+        self.crowd(1860, 2)                    # 4 here, 2 everywhere else
+        await server.auto_place_tx(margin=server.AUTO_DF_MARGIN)
+        self.assertEqual(self.moves, [])
+
+    async def test_the_same_improvement_is_taken_before_a_transmission(self):
+        """Before a transmission we have not made yet, moving costs nothing --
+        so the margin that protects a run must not also freeze the placement
+        that starts one."""
+        self.busy_band(2)
+        self.crowd(1860, 2)
+        await server.auto_place_tx()
+        self.assertTrue(self.moves)
+
+    async def test_never_moves_while_the_transmitter_is_up(self):
+        """The offset is nudged through the WSJT-X window. Doing that during a
+        transmission changes the tone on the air mid-symbol."""
+        server.ST.status["transmitting"] = True
+        self.crowd(1860, 30)
+        await server.auto_place_tx(margin=server.AUTO_DF_MARGIN)
+        self.assertEqual(self.moves, [])
+
+    async def test_holding_says_how_crowded_it_actually_is(self):
+        """It used to report "already clear" whenever it could not find better
+        -- which includes the case where the whole band is busy and we are
+        sitting under three signals. That reads as an all-clear and is why the
+        collision went unnoticed."""
+        self.busy_band(5)
+        server.ST.decodes = [d for d in server.ST.decodes if d["df"] != 1860]
+        self.crowd(1860, 3)
+        await server.auto_place_tx()
+        self.assertEqual(self.moves, [], "nowhere better to go")
+        note = server.ST.audio["note"]
+        self.assertIn("3 signals nearby", note)
+        self.assertNotIn("already clear", note)
+
+
+class AudioNote(unittest.TestCase):
+    """The note is a verdict about a moment. Served to a page that loads later
+    it became a claim about the present, and the interface showed 'already
+    clear' over a frequency that had been crowded for five minutes."""
+
+    def note(self, age):
+        server.ST.audio = {"tx": 1860, "rx": 2773, "hold": False, "auto": True,
+                           "note": "holding 1860 Hz -- already clear",
+                           "note_at": time.time() - age, "busy": False}
+        return server.audio_view()
+
+    def test_a_stale_note_is_not_served_as_current(self):
+        self.assertEqual(self.note(server.AUDIO_NOTE_TTL + 5)["note"], "")
+
+    def test_a_fresh_note_still_arrives(self):
+        self.assertIn("already clear", self.note(1)["note"])
+
+    def test_the_offsets_survive_the_expiry(self):
+        """Only the note goes stale. Dropping the offsets with it would blank
+        the TX and RX readouts on every page load."""
+        v = self.note(server.AUDIO_NOTE_TTL + 5)
+        self.assertEqual((v["tx"], v["rx"]), (1860, 2773))
+
+    def test_the_timestamp_stays_off_the_wire(self):
+        self.assertNotIn("note_at", self.note(1))
+
+
+class ForeignTransmissions(unittest.IsolatedAsyncioTestCase):
+    """The radio does not say who keyed it, and ft8xss is not the only thing
+    on this one. Measured on 2026-08-23: a CW harvester sharing the rig swept
+    40/20/10/15m. Each CW transmission pinned the ALC at 1.00, the drive check
+    read that as a badly over-driven FT8 transmission, and rewrote WSJT-X's Pwr
+    slider to match -- 40m went 68 -> 200 (13 dB down), 20m 100 -> 180. None of
+    those transmissions came from WSJT-X."""
+
+    def setUp(self):
+        server.ST.clients = set()
+        server.ST.status = {"dial": 14074000, "transmitting": False}
+        server.ST.rig = {"rfpower_pct": 25}
+        server.ST.txcheck = {}
+        server.ST.checked_bands = set()
+        # Applying a correction restarts WSJT-X. These cases are about what
+        # gets judged, not what gets done about it.
+        self._autofix = server.AUTO_FIX
+        server.AUTO_FIX = False
+
+    def tearDown(self):
+        server.AUTO_FIX = self._autofix
+
+    async def test_a_transmission_we_did_not_make_is_not_judged(self):
+        peak = {"po": 45.0, "alc": 1.0, "swr": 1.0}      # a CW transmission
+        await server.evaluate_transmission(peak, by_wsjtx=False)
+        self.assertEqual(server.ST.txcheck, {},
+                         "must not describe someone else's transmission")
+        self.assertEqual(server.ST.checked_bands, set(),
+                         "and must not mark the band judged on the strength "
+                         "of it -- that disables our own correction")
+
+    async def test_defaulting_to_not_ours_is_the_safe_way_round(self):
+        """A caller that forgets the flag must lose a correction, not invent
+        one: an unmade correction costs power, a wrong one costs the
+        calibration."""
+        await server.evaluate_transmission({"po": 45.0, "alc": 1.0, "swr": 1.0})
+        self.assertEqual(server.ST.txcheck, {})
+
+    async def test_our_own_transmission_is_still_judged(self):
+        await server.evaluate_transmission({"po": 8.0, "alc": 0.09, "swr": 1.0},
+                                           by_wsjtx=True)
+        self.assertEqual(server.ST.txcheck.get("band"), "20m")
+        self.assertEqual(server.ST.txcheck.get("po"), 8.0)
+
+
+class BandTuneCooldown(unittest.TestCase):
+    """A band change runs the ATU, and the ATU keys the transmitter. That is
+    right when the operator moved. When something else sharing the rig sweeps
+    the dial it is not: on 2026-08-23 a CW harvester hopping 40/20/10/15m had
+    ft8xss key the ATU seven times in six minutes."""
+
+    def test_the_first_change_to_a_band_tunes(self):
+        self.assertTrue(server._tune_due("20m", {}, 1000.0))
+
+    def test_a_dial_that_hops_back_does_not_tune_again(self):
+        tuned = {"20m": 1000.0}
+        self.assertFalse(server._tune_due("20m", tuned, 1050.0))
+
+    def test_each_band_is_tracked_separately(self):
+        """A real band change to somewhere new still needs its ATU run."""
+        tuned = {"20m": 1000.0}
+        self.assertTrue(server._tune_due("15m", tuned, 1050.0))
+
+    def test_the_cooldown_expires(self):
+        tuned = {"20m": 1000.0}
+        self.assertTrue(
+            server._tune_due("20m", tuned, 1000.0 + server.BAND_TUNE_COOLDOWN))
 
 
 class ProbeTransmission(unittest.TestCase):
