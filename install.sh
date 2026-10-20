@@ -289,7 +289,7 @@ EnvironmentFile=-%h/.config/ft8xss.env
 ExecStartPre=/bin/sleep 3
 ExecStart=/usr/bin/wsjtx
 # Stopping WSJT-X mid-transmission can leave CAT PTT latched down. Drop it.
-ExecStopPost=-/usr/bin/python3 $SRC/packaging/unkey.py
+ExecStopPost=-/usr/bin/python3 $SRC/unkey.py
 Restart=always
 RestartSec=5
 [Install]
