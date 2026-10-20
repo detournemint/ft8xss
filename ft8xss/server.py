@@ -1232,8 +1232,13 @@ async def restart_wsjtx_with(att):
     def rewrite():
         try:
             txt = ini.read_text(errors="ignore")
-            ini.write_text(re.sub(r"^OutAttenuation=.*$",
-                                  f"OutAttenuation={att}", txt, flags=re.M))
+            txt = re.sub(r"^OutAttenuation=.*$", f"OutAttenuation={att}",
+                         txt, flags=re.M)
+            # Free text over UDP only lands when tab 1 is showing; on any
+            # other tab (WSJT-Z adds Filtering etc.) WSJT-X drops it silently,
+            # so CQ and the band-setup probe would never go out.
+            txt = re.sub(r"^GUItab=.*$", "GUItab=0", txt, flags=re.M)
+            ini.write_text(txt)
         except OSError:
             pass
 
@@ -1265,7 +1270,14 @@ async def _probe_once():
 
     Enable Tx never survives a WSJT-X restart, so this must confirm rather than
     assume."""
-    for attempt in range(3):
+    # After a WSJT-X restart the Status packets arrive before the main window
+    # can take keystrokes; give the GUI time to come up before arming.
+    for _ in range(30):
+        gui.invalidate()
+        if gui.available():
+            break
+        await asyncio.sleep(1)
+    for attempt in range(5):
         if ST.status.get("tx_enabled") is True:
             break
         ok = await set_tx(True)
